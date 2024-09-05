@@ -182,7 +182,6 @@ protected:
     void sio_qrcode_length();          // OxBE
     void sio_qrcode_output();          // 0xBF
 
-    void read_menu_entry(uint8_t maxlen, fujiMenu *fm);
     void sio_status() override;
     void sio_process(uint32_t commanddata, uint8_t checksum) override;
 
