@@ -811,6 +811,18 @@ void rs232Network::rs232_process(uint32_t commanddata, uint8_t checksum)
     case 'S':
         rs232_status();
         break;
+    case 'P':
+        rs232_ack();
+        rs232_parse_json();
+        break;
+    case 'Q':
+        rs232_ack();
+        rs232_set_json_query();
+        break;
+    case 0xFC:
+        rs232_ack();
+        rs232_set_channel_mode();
+        break;
     case 0xFF:
         rs232_special_inquiry();
         break;
@@ -836,6 +848,8 @@ void rs232Network::rs232_poll_interrupt()
 
         if (status.rxBytesWaiting > 0 || status.connected == 0)
             rs232_assert_interrupt();
+        else
+            fnSystem.digital_write(PIN_RS232_RI,DIGI_HIGH);
 
         reservedSave = status.connected;
         errorSave = status.error;
@@ -902,18 +916,20 @@ void rs232Network::parse_and_instantiate_protocol()
     // Invalid URL returns error 165 in status.
     if (!urlParser->isValidUrl())
     {
-        Debug_printf("Invalid devicespec: %s\n", deviceSpec.c_str());
+        Debug_printf("Invalid devicespec: >%s<\n", deviceSpec.c_str());
         status.error = NETWORK_ERROR_INVALID_DEVICESPEC;
         rs232_error();
         return;
     }
 
-    Debug_printf("::parse_and_instantiate_protocol transformed to (%s, %s)\n", deviceSpec.c_str(), urlParser->mRawUrl.c_str());
+#ifdef VERBOSE_PROTOCOL
+    Debug_printf("::parse_and_instantiate_protocol -> spec: >%s<, url: >%s<\r\n", deviceSpec.c_str(), urlParser->mRawUrl.c_str());
+#endif
 
     // Instantiate protocol object.
     if (!instantiate_protocol())
     {
-        Debug_printf("Could not open protocol.\n");
+        Debug_printf("Could not open protocol. spec: >%s<, url: >%s<\n", deviceSpec.c_str(), urlParser->mRawUrl.c_str());
         status.error = NETWORK_ERROR_GENERAL;
         rs232_error();
         return;
@@ -994,7 +1010,7 @@ void rs232Network::processCommaFromDevicespec()
  * Called to pulse the PROCEED interrupt, rate limited by the interrupt timer.
  */
 void rs232Network::rs232_assert_interrupt()
-{
+{ 
     fnSystem.digital_write(PIN_RS232_RI, interruptProceed == true ? DIGI_HIGH : DIGI_LOW);
 }
 
@@ -1029,6 +1045,7 @@ void rs232Network::rs232_set_json_query()
 
     inp = strrchr((const char *)in, ':');
     inp++;
+    Debug_printv("Q: %s\n",in);
     json.setReadQuery(string(inp),cmdFrame.aux2);
     json_bytes_remaining = json.readValueLen();
     tmp = (uint8_t *)malloc(json.readValueLen());

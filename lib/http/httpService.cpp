@@ -1,4 +1,5 @@
 
+#include "fnHttpClient.h"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
 #include "httpService.h"
@@ -220,7 +221,9 @@ void fnHttpService::send_header_footer(httpd_req_t *req, int headfoot)
 void fnHttpService::send_file_parsed(httpd_req_t *req, const char *filename)
 {
     // Note that we don't add FNWS_FILE_ROOT as it should've been done in send_file()
+#ifdef VERBOSE_HTTP
     Debug_printf("Opening file for parsing: '%s'\n", filename);
+#endif
 
     _fnwserr err = fnwserr_noerrr;
 
@@ -341,7 +344,9 @@ void fnHttpService::parse_query(httpd_req_t *req, queryparts *results)
 
     while (token != NULL)
     {
+#ifdef VERBOSE_HTTP
         Debug_printf("Item: %s\n", token);
+#endif
         vItems.push_back(string(token));
         token = strtok(NULL, "&");
     }
@@ -363,7 +368,9 @@ void fnHttpService::parse_query(httpd_req_t *req, queryparts *results)
         key = it->substr(0, it->find_first_of("="));
         value = it->substr(it->find_first_of("=") + 1);
 
+#ifdef VERBOSE_HTTP
         Debug_printf("Key %s : Value %s\n", key.c_str(), value.c_str());
+#endif
 
         results->query_parsed.insert(make_pair(key, value));
     }
@@ -373,7 +380,9 @@ void fnHttpService::parse_query(httpd_req_t *req, queryparts *results)
 
 esp_err_t fnHttpService::get_handler_index(httpd_req_t *req)
 {
+#ifdef VERBOSE_HTTP
     Debug_printf("Index request handler %p\n", xTaskGetCurrentTaskHandle());
+#endif
 
     send_file(req, "index.html");
     return ESP_OK;
@@ -382,7 +391,9 @@ esp_err_t fnHttpService::get_handler_index(httpd_req_t *req)
 esp_err_t fnHttpService::get_handler_test(httpd_req_t *req)
 {
     TaskHandle_t task = xTaskGetCurrentTaskHandle();
+#ifdef VERBOSE_HTTP
     Debug_printf("Test request handler %p\n", task);
+#endif
 
     // Debug_printf("WiFI handle %p\n", handle_WiFi);
     // vTaskPrioritySet(handle_WiFi, 5);
@@ -535,7 +546,9 @@ esp_err_t fnHttpService::get_handler_print(httpd_req_t *req)
         httpd_resp_send_chunk(req, buf, count);
     } while (count > 0);
 
+#ifdef VERBOSE_HTTP
     Debug_printf("Sent %u bytes total from print file\n", total);
+#endif
 
     free(buf);
     fclose(poutput);
@@ -550,12 +563,16 @@ esp_err_t fnHttpService::get_handler_print(httpd_req_t *req)
 
 esp_err_t fnHttpService::get_handler_modem_sniffer(httpd_req_t *req)
 {
+#ifdef VERBOSE_HTTP
     Debug_printf("Modem Sniffer output request handler\n");
+#endif
 
     fnHTTPD.clearErrMsg();
 
     ModemSniffer *modemSniffer = sioR->get_modem_sniffer();
+#ifdef VERBOSE_HTTP
     Debug_printf("Got modem Sniffer.\n");
+#endif
     time_t now = fnSystem.millis();
 
     if (now - sioR->get_last_activity_time() < PRINTER_BUSY_TIME) // re-using printer timeout constant.
@@ -566,7 +583,9 @@ esp_err_t fnHttpService::get_handler_modem_sniffer(httpd_req_t *req)
     }
 
     FILE *sOutput = modemSniffer->closeOutputAndProvideReadHandle();
+#ifdef VERBOSE_HTTP
     Debug_printf("Got file handle %p\n", sOutput);
+#endif
     if (sOutput == nullptr)
     {
         fnHTTPD.addToErrMsg("Unable to open modem sniffer output.\n");
@@ -589,12 +608,16 @@ esp_err_t fnHttpService::get_handler_modem_sniffer(httpd_req_t *req)
         httpd_resp_send_chunk(req, buf, count);
     } while (count > 0);
 
+#ifdef VERBOSE_HTTP
     Debug_printf("Sent %u bytes total from sniffer file\n", total);
+#endif
 
     free(buf);
     fclose(sOutput);
 
+#ifdef VERBOSE_HTTP
     Debug_printf("Sniffer dump completed.\n");
+#endif
 
     return ESP_OK;
 }
@@ -661,6 +684,11 @@ esp_err_t fnHttpService::get_handler_mount(httpd_req_t *req)
         {
             fujiDisk *disk = theFuji.get_disks(ds);
             fujiHost *host = theFuji.get_hosts(hs);
+#ifdef BUILD_APPLE
+            DEVICE_TYPE *disk_dev = theFuji.get_disk_dev(ds);
+#else
+	    DEVICE_TYPE *disk_dev = &disk->disk_dev;
+#endif
 
             disk->fileh = host->fnfile_open(qp.query_parsed["filename"].c_str(), (char *)qp.query_parsed["filename"].c_str(), qp.query_parsed["filename"].length() + 1, flag);
 
@@ -677,14 +705,14 @@ esp_err_t fnHttpService::get_handler_mount(httpd_req_t *req)
 #endif
                 strcpy(disk->filename,qp.query_parsed["filename"].c_str());
                 disk->disk_size = host->file_size(disk->fileh);
-                disk->disk_type = disk->disk_dev.mount(disk->fileh, disk->filename, disk->disk_size);
+                disk->disk_type = disk_dev->mount(disk->fileh, disk->filename, disk->disk_size);
                 #ifdef BUILD_APPLE
-                if(mode == fnConfig::mount_modes::MOUNTMODE_WRITE) {disk->disk_dev.readonly = false;}
+                if(mode == fnConfig::mount_modes::MOUNTMODE_WRITE) {disk_dev->readonly = false;}
                 #endif
                 Config.store_mount(ds, hs, qp.query_parsed["filename"].c_str(), mode);
                 Config.save();
                 theFuji._populate_slots_from_config(); // otherwise they don't show up in config.
-                disk->disk_dev.device_active = true;
+                disk_dev->device_active = true;
             }
         }
         else
@@ -728,11 +756,14 @@ esp_err_t fnHttpService::get_handler_eject(httpd_req_t *req)
     {
         fnHTTPD.addToErrMsg("<li>deviceslot should be between 0 and 7</li>");
     }
-    #ifdef BUILD_APPLE
-    if(theFuji.get_disks(ds)->disk_dev.device_active) //set disk switched only if device was previosly mounted. 
-        theFuji.get_disks(ds)->disk_dev.switched = true;
-    #endif
-    theFuji.get_disks(ds)->disk_dev.unmount();
+#ifdef BUILD_APPLE
+    DEVICE_TYPE *disk_dev = theFuji.get_disk_dev(ds);
+    if(disk_dev->device_active) //set disk switched only if device was previosly mounted.
+        disk_dev->switched = true;
+#else
+    DEVICE_TYPE *disk_dev = &theFuji.get_disks(ds)->disk_dev;
+#endif
+    disk_dev->unmount();
 #ifdef BUILD_ATARI
     if (theFuji.get_disks(ds)->disk_type == MEDIATYPE_CAS || theFuji.get_disks(ds)->disk_type == MEDIATYPE_WAV)
     {
@@ -744,7 +775,7 @@ esp_err_t fnHttpService::get_handler_eject(httpd_req_t *req)
     Config.clear_mount(ds);
     Config.save();
     theFuji._populate_slots_from_config(); // otherwise they don't show up in config.
-    theFuji.get_disks(ds)->disk_dev.device_active = false;
+    disk_dev->device_active = false;
 
     // Finally, scan all device slots, if all empty, and config enabled, enable the config device.
     if (Config.get_general_config_enabled())
@@ -1153,10 +1184,49 @@ esp_err_t fnHttpService::get_handler_slot(httpd_req_t *req)
     return ESP_OK;
 }
 
+std::string fnHttpService::shorten_url(std::string url)
+{
+    int id = shortURLs.size();
+    shortURLs.push_back(url);
+
+    // Ideally would use hostname, but it doesn't include .local needed for mDNS devices
+    std::string shortened = "http://" + fnSystem.Net.get_ip4_address_str() + "/url/" + std::to_string(id);
+    Debug_printf("Short URL /url/%d registered for URL: %s\n", id, url.c_str());
+    return shortened;
+}
+
+esp_err_t fnHttpService::get_handler_shorturl(httpd_req_t *req)
+{
+    // Strip the /url/ from the path
+    std::string id_str = std::string(req->uri).substr(5);
+    Debug_printf("Short URL handler: %s\n", id_str.c_str());
+
+    if (!std::all_of(id_str.begin(), id_str.end(), ::isdigit)) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_FAIL;
+    }
+
+    int id = std::stoi(id_str);
+    if (id > fnHTTPD.shortURLs.size())
+    {
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_send(req, NULL, 0);
+    }
+    else
+    {
+        httpd_resp_set_status(req, "303 See Other");
+        httpd_resp_set_hdr(req, "Location", fnHTTPD.shortURLs[id].c_str());
+        httpd_resp_send(req, NULL, 0);
+    }
+    return ESP_OK;
+}
+
 esp_err_t fnHttpService::post_handler_config(httpd_req_t *req)
 {
-
+#ifdef VERBOSE_HTTP
     Debug_printf("Post_config request handler '%s'\n", req->uri);
+#endif
 
     _fnwserr err = fnwserr_noerrr;
 
@@ -1164,7 +1234,6 @@ esp_err_t fnHttpService::post_handler_config(httpd_req_t *req)
     char *buf = (char *)calloc(FNWS_RECV_BUFF_SIZE, 1);
     if (buf == NULL)
     {
-
         Debug_printf("Couldn't allocate %u bytes to store POST contents\n", FNWS_RECV_BUFF_SIZE);
 
         err = fnwserr_memory;
@@ -1411,6 +1480,13 @@ httpd_handle_t fnHttpService::start_server(serverstate &state)
          .is_websocket = false,
          .handle_ws_control_frames = false,
          .supported_subprotocol = nullptr},
+        {.uri = "/url/*",
+        .method = HTTP_GET,
+        .handler = get_handler_shorturl,
+        .user_ctx = NULL,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr},
 #ifdef BUILD_ADAM
         {.uri = "/term",
          .method = HTTP_GET,
