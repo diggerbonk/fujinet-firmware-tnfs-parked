@@ -4,8 +4,8 @@
 
 #include <string.h>
 
-#include "esp_rom_gpio.h"
-#include "soc/spi_periph.h"
+#include <esp_rom_gpio.h>
+#include <soc/spi_periph.h>
 
 #include "iwm_ll.h"
 #include "iwm.h"
@@ -15,8 +15,21 @@
 #include "fnHardwareTimer.h"
 #include "../../include/debug.h"
 #include "led.h"
+#include "spi_continuous.h"
 
 #define MHZ (1000*1000)
+#define CELL_US 4 // microseconds
+#define IWM_SAMPLES_PER_CELL(freq) ((CELL_US * (freq)) / MHZ)
+#define IWM_BITLEN_FOR_BYTES(bytecount, freq, buffer) ({ \
+      (bytecount) * 8 * IWM_SAMPLES_PER_CELL(freq);      \
+    })
+#define IWM_NUMBYTES_FOR_BITS(bitcount, buffer) ({      \
+      size_t bufbits = sizeof(*(buffer)) * 8;           \
+      size_t blen = (bitcount) *                        \
+        IWM_SAMPLES_PER_CELL(smartport.f_spirx);        \
+      blen = (blen + bufbits - 1) / bufbits;            \
+      blen;                                             \
+    })
 
 volatile uint8_t _phases = 0;
 volatile sp_cmd_state_t sp_command_mode = sp_cmd_state_t::standby;
@@ -45,7 +58,7 @@ void IRAM_ATTR phi_isr_handler(void *arg)
       c = IWM.command_packet.command & 0x0f;
       if (!error) // packet received ok and checksum good
       {
-        if (c == 0x05)
+        if (c == SP_CMD_INIT)
         {
           smartport.iwm_ack_clr();
           sp_command_mode = sp_cmd_state_t::command;
@@ -60,11 +73,9 @@ void IRAM_ATTR phi_isr_handler(void *arg)
               // look for CTRL command
               //  Debug_printf("\nhello from ISR - looking for control command!");
 
-              if ((c == 0x02) ||
-                  (c == 0x04) ||
-                  (c == 0x09) ||
-                  (c == 0x0a) ||
-                  (c == 0x0b))
+              if ((c == SP_CMD_WRITEBLOCK) ||
+                  (c == SP_CMD_CONTROL) ||
+                  (c == SP_CMD_WRITE))
               {
                 // Debug_printf("\nhello from ISR - control command!");
                 if (smartport.req_wait_for_falling_timeout(5500))
@@ -122,10 +133,10 @@ void IRAM_ATTR phi_isr_handler(void *arg)
   // and then PH1 = 0 (going low) and PH3 = 1 (still high)
   else if ((diskii_xface.iwm_enable_states() & 0b11) && !((int_gpio_num == SP_PHI1 && _phases == 0b1000)))
   {
-    if (theFuji._fnDisk2s[diskii_xface.iwm_enable_states() - 1].move_head())
+    if (IWM_ACTIVE_DISK2->move_head())
     {
       isrctr = isrctr + 1;
-      theFuji._fnDisk2s[diskii_xface.iwm_enable_states() - 1].change_track(isrctr);
+      IWM_ACTIVE_DISK2->change_track(isrctr);
     }
   }
 }
@@ -144,7 +155,7 @@ inline void iwm_ll::iwm_extra_clr()
 #endif
 }
 
-void IRAM_ATTR iwm_sp_ll::encode_spi_packet()
+int IRAM_ATTR iwm_sp_ll::encode_spi_packet()
 {
   // clear out spi buffer
   memset(spi_buffer, 0, SPI_SP_LEN);
@@ -172,7 +183,7 @@ void IRAM_ATTR iwm_sp_ll::encode_spi_packet()
     }
     i++;
   }
-  spi_len = --j;
+  return j - 1;
 }
 
 
@@ -190,17 +201,16 @@ int IRAM_ATTR iwm_sp_ll::iwm_send_packet_spi()
 
   portDISABLE_INTERRUPTS();
   set_output_to_spi();
-  encode_spi_packet();
+  int spi_len = encode_spi_packet();
 
   // send data stream using SPI
   esp_err_t ret;
   spi_transaction_t trans;
   memset(&trans, 0, sizeof(spi_transaction_t));
-  trans.tx_buffer = spi_buffer; // finally send the line data
+  trans.tx_buffer = spi_buffer;
   trans.length = spi_len * 8;   // Data length, in bits
-  trans.flags = 0;              // undo SPI_TRANS_USE_TXDATA flag
 
-  iwm_ack_set(); // go hi-z - signal ready to send data
+  iwm_ack_set(); // signal ready to send data
 
   // wait for req line to go high
   if (req_wait_for_rising_timeout(300000))
@@ -231,23 +241,89 @@ int IRAM_ATTR iwm_sp_ll::iwm_send_packet_spi()
   return 0;
 }
 
-bool IRAM_ATTR iwm_sp_ll::spirx_get_next_sample()
+#define IWM_NEXT_BIT() ({bool _v = ((src[offset / 8] << (offset % 8)) & 0x80) == 0x80; \
+      offset++; _v;})
+uint8_t iwm_ll::iwm_decode_byte(uint8_t *src, size_t src_size, unsigned int sample_frequency,
+                                int timeout, size_t *bit_offset, bool *more_avail)
 {
-  if (spirx_bit_ctr > 7)
-  {
-    spirx_bit_ctr = 0;
-    spirx_byte_ctr++;
+  unsigned int numbits, idx;
+  uint8_t byte;
+  bool bit, current_level;
+  const int spi_samples_per_cell = (CELL_US * sample_frequency) / MHZ;
+  const int half_samples = spi_samples_per_cell / 2;
+  size_t offset = *bit_offset;
+  static bool prev_level = true;
+
+  // ((f_nyquist * f_over) * 18) / (1000 * 1000);
+  int timeout_ctr = (sample_frequency * timeout) / MHZ;
+
+
+  *more_avail = true;
+  for (numbits = 8, byte = 0; numbits; numbits--) {
+    for (idx = bit = 0; idx < spi_samples_per_cell; idx++) {
+      if (offset / 8 >= src_size) {
+        // out of spi data, abort
+        numbits = 1;
+        *more_avail = false;
+        break;
+      }
+
+      current_level = IWM_NEXT_BIT();
+
+      // loop through 4 usec worth of samples looking for an edge
+      // if found, jump forward 2 usec and set bit = 1;
+      // otherwise, bit = 0;
+      if (prev_level != current_level) {
+        bit = true;
+        // resync the receiver - must be halfway through 4-us period at an edge
+        idx = half_samples;
+      }
+
+      prev_level = current_level;
+    }
+
+    byte <<= 1;
+    byte |= bit;
   }
-  return (((spi_buffer[spirx_byte_ctr] << spirx_bit_ctr++) & 0x80) == 0x80);
+
+  // See if there are more 1 bits
+  for (; timeout_ctr; timeout_ctr--) {
+    if (offset / 8 >= src_size) {
+      *more_avail = false;
+      break;
+    }
+    current_level = IWM_NEXT_BIT();
+    if (prev_level != current_level)
+      break;
+  }
+  if (!timeout_ctr)
+    *more_avail = false;
+
+  *bit_offset = offset;
+  return byte;
 }
 
-
-int IRAM_ATTR iwm_sp_ll::iwm_read_packet_spi(int n)
+size_t iwm_ll::iwm_decode_buffer(uint8_t *src, size_t src_size, unsigned int sample_frequency,
+                                 int timeout, uint8_t *dest, size_t *used)
 {
-  return iwm_read_packet_spi(packet_buffer, n);
+  bool more_data = true;
+  size_t offset = 0;
+  uint8_t *output;
+
+
+  for (output = dest, offset = 0; more_data; output++)
+    *output = iwm_decode_byte(src, src_size, sample_frequency, timeout, &offset, &more_data);
+
+  *used = (offset + 7) / 8;
+  return output - dest;
 }
 
-int IRAM_ATTR iwm_sp_ll::iwm_read_packet_spi(uint8_t* buffer, int n)
+int IRAM_ATTR iwm_sp_ll::iwm_read_packet_spi(int packet_len)
+{
+  return iwm_read_packet_spi(packet_buffer, packet_len);
+}
+
+int IRAM_ATTR iwm_sp_ll::iwm_read_packet_spi(uint8_t* buffer, int packet_len)
 { // read data stream using SPI
 
   // these are for the on the fly checksum decode
@@ -287,18 +363,15 @@ int IRAM_ATTR iwm_sp_ll::iwm_read_packet_spi(uint8_t* buffer, int n)
 
   */
 
-  spi_len = n * pulsewidth * 11 / 10 ; //add 10% for overhead to accomodate YS command packet
-
   // comment this out, trying to minimise the time from REQ interrupt to start the SPI polling
   // helps the IIgs get in sync to the bitstream quicker
   //memset(spi_buffer, 0xff, SPI_SP_LEN);
 
   memset(&rxtrans, 0, sizeof(spi_transaction_t));
-  rxtrans.flags = 0;
-  rxtrans.length = 0; //spi_len * 8;   // Data length, in bits
-  rxtrans.rxlength = spi_len * 8;   // Data length, in bits
-  rxtrans.tx_buffer = nullptr;
-  rxtrans.rx_buffer = spi_buffer; // finally send the line data
+  rxtrans.rx_buffer = spi_buffer;
+
+  // add 10% for overhead to accomodate YS command packet
+  rxtrans.rxlength = IWM_BITLEN_FOR_BYTES(packet_len * 11 / 10, f_spirx, spi_buffer);
 
   // setup a timeout counter to wait for REQ response
   if (req_wait_for_rising_timeout(10000))
@@ -316,22 +389,14 @@ int IRAM_ATTR iwm_sp_ll::iwm_read_packet_spi(uint8_t* buffer, int n)
   iwm_extra_clr();
 
   // decode the packet here
-  spirx_byte_ctr = 0; // initialize the SPI buffer sampler
-  spirx_bit_ctr = 0;
-
-  bool have_data = true;
+  size_t spirx_bit_ctr = 0; // initialize the SPI buffer sampler
+  bool more_data, have_data = true;
   bool synced = false;
   int idx = 0;             // index into *buffer
-  bool bit = false; // = 0;        // logical bit value
 
   uint8_t rxbyte = 0;      // r23 received byte being built bit by bit
-  int numbits = 8;             // number of bits left to read into the rxbyte
-
-  bool prev_level = true;
-  bool current_level; // level is signal value (fast time), bits are decoded data values (slow time)
 
   //for tracking the number of samples
-  int bit_position;
   int last_bit_pos = 0;
   int samples;
   bool start_packet = true;
@@ -345,9 +410,8 @@ int IRAM_ATTR iwm_sp_ll::iwm_read_packet_spi(uint8_t* buffer, int n)
   {
     iwm_extra_set(); // signal to LA we're in the nested loop
 
-    bit_position = spirx_byte_ctr * 8 + spirx_bit_ctr; // current bit positon
-    samples = bit_position - last_bit_pos; // difference since last time
-    last_bit_pos = bit_position;
+    samples = spirx_bit_ctr - last_bit_pos; // difference since last time
+    last_bit_pos = spirx_bit_ctr;
 
     // calc checksum as we go
     // note: idx is pointing to the next byte to be read at this point
@@ -402,64 +466,17 @@ int IRAM_ATTR iwm_sp_ll::iwm_read_packet_spi(uint8_t* buffer, int n)
       fnTimer.alarm_snooze( (samples * 10 * 1000 * 1000) / f_spirx); // samples * 10 /2 ); // snooze the timer based on the previous number of samples
     }
 
-    iwm_extra_clr();
-    do
-    {
-      bit = false; // assume no edge in this next bit
-#ifdef VERBOSE_IWM
-      Debug_printf("\npulsewidth = %d, halfwidth = %d",pulsewidth,halfwidth);
-      Debug_printf("\nspibyte spibit intctr sampval preval rxbit rxbyte");
-#endif
-      int i = 0;
-      while (i < pulsewidth)
-      {
-        current_level = spirx_get_next_sample();
-        current_level ? iwm_extra_clr() : iwm_extra_set();
-#ifdef VERBOSE_IWM
-        Debug_printf("\n%7d %6d %6d %7d %6d %5d %6d", spirx_byte_ctr, spirx_bit_ctr, i, current_level, prev_level, bit, rxbyte);
-#endif
-        // sprix:
-        // loop through 4 usec worth of samples looking for an edge
-        // if found, jump forward 2 usec and set bit = 1;
-        // otherwise, bit = 0;
-        if ((prev_level != current_level))
-        {
-          i = halfwidth; // resync the receiver - must be halfway through 4-us period at an edge
-          bit = true;
-        }
-        prev_level = current_level;
-        i++;
-      }
-      rxbyte <<= 1;
-      rxbyte |= bit;
-      iwm_extra_set(); // signal to LA we're done with this bit
-    } while (--numbits > 0);
+    rxbyte = iwm_decode_byte(spi_buffer, SPI_SP_LEN, f_spirx, 19, &spirx_bit_ctr, &more_data);
+
     if ((rxbyte == 0xc3) && (!synced))
     {
       synced = true;
       idx = 5;
     }
     buffer[idx++] = rxbyte;
-    // wait for leading edge of next byte or timeout for end of packet
-    int timeout_ctr = (f_spirx * 19) / (1000 * 1000); //((f_nyquist * f_over) * 18) / (1000 * 1000);
-#ifdef VERBOSE_IWM
-    Debug_printf("%02x ", rxbyte);
-#endif
-    // now wait for leading edge of next byte
-    iwm_extra_clr();
-    if (idx > n)
+    if (idx > packet_len || !more_data)
       have_data = false;
-    else
-      do
-      {
-        if (--timeout_ctr < 1)
-        { // end of packet
-          have_data = false;
-          break;
-        }
-      } while (spirx_get_next_sample() == prev_level);
-    numbits = 8;
-  } while (have_data); // while have_data
+  } while (have_data);
 
   // keep this so we can print them later for debug
   smartport.calc_checksum = checksum;
@@ -529,7 +546,7 @@ void iwm_sp_ll::setup_spi()
     spirx_mosi_pin = SP_RDDATA;
 
   // SPI for receiving packets - sprirx
-  bus_cfg = {
+  spi_bus_config_t bus_cfg = {
     .mosi_io_num = spirx_mosi_pin,
     .miso_io_num = SP_WRDATA,
     .sclk_io_num = -1,
@@ -629,7 +646,10 @@ void iwm_ll::setup_gpio()
   fnSystem.set_pin_mode(SP_PHI2, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_NONE, gpio_int_type_t::GPIO_INTR_ANYEDGE);
   fnSystem.set_pin_mode(SP_PHI3, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_NONE, gpio_int_type_t::GPIO_INTR_ANYEDGE);
 
-  fnSystem.set_pin_mode(SP_WREQ, gpio_mode_t::GPIO_MODE_INPUT);
+  fnSystem.set_pin_mode(SP_WREQ, gpio_mode_t::GPIO_MODE_INPUT,
+                        SystemManager::pull_updown_t::PULL_UP,
+                        gpio_int_type_t::GPIO_INTR_ANYEDGE);
+
   fnSystem.set_pin_mode(SP_DRIVE1, gpio_mode_t::GPIO_MODE_INPUT);
   fnSystem.set_pin_mode(SP_DRIVE2, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_UP);
   fnSystem.set_pin_mode(SP_EN35, gpio_mode_t::GPIO_MODE_INPUT);
@@ -773,7 +793,7 @@ size_t iwm_sp_ll::decode_data_packet(uint8_t* input_data, uint8_t* output_data)
   numodd = input_data[11] & 0x7f;
   numgrps = input_data[12] & 0x7f;
   numdata = numodd + numgrps * 7;
-  Debug_printf("\nDecoding %d bytes",numdata);
+  // Debug_printf("\nDecoding %d bytes",numdata);
 
   // decode oddbyte(s), 1 in a 512 data packet
   for(int i = 0; i < numodd; i++){
@@ -827,8 +847,93 @@ void iwm_diskii_ll::set_output_to_low()
 #define RMT_TX_CHANNEL rmt_channel_t::RMT_CHANNEL_0
 #define RMT_USEC (APB_CLK_FREQ / MHZ)
 
-void iwm_diskii_ll::start(uint8_t drive)
+// enable/disable capturing write signal from Disk II
+void IRAM_ATTR diskii_write_handler_forwarder(void *arg)
 {
+  iwm_diskii_ll *d2i = (iwm_diskii_ll *) arg;
+  d2i->diskii_write_handler();
+  return;
+}
+
+void IRAM_ATTR iwm_diskii_ll::diskii_write_handler()
+{
+  bool doCapture = !IWM_BIT(SP_WREQ);
+
+
+  //Debug_printf("\r\nDisk II write state: %i", doCapture);
+
+  if (doCapture) {
+    d2w_begin = track_location;
+    d2w_position = cspi_current_pos(smartport.spirx);
+    d2w_writing = true;
+  }
+  else if (d2w_writing) {
+    BaseType_t woken;
+    iwm_write_data item = {
+      .quarter_track = IWM_ACTIVE_DISK2->get_track_pos(),
+      .track_begin = d2w_begin,
+      .track_end = track_location,
+      .track_numbits = track_numbits,
+      .buffer = NULL,
+      .length = 0,
+    };
+
+    {
+      size_t offset;
+
+      // Rewind pointer to make sure to get sync bytes
+      d2w_position = (d2w_position + d2w_buflen - D2W_CHUNK_SIZE * 2) % d2w_buflen;
+
+      offset = cspi_current_pos(smartport.spirx);
+      item.length = (offset + d2w_buflen - d2w_position) % d2w_buflen;
+    }
+
+    item.buffer = (decltype(item.buffer)) heap_caps_malloc(item.length, MALLOC_CAP_8BIT);
+    if (!item.buffer)
+      Debug_printf("\r\nDisk II unable to allocate buffer! %u %u %u",
+                   item.length, item.track_begin, item.track_end);
+    else {
+      size_t end1, end2;
+
+
+      end1 = d2w_position + item.length;
+      end2 = 0;
+      if (end1 >= d2w_buflen) {
+        end2 = end1 - d2w_buflen;
+        end1 = d2w_buflen;
+      }
+
+      end1 -= d2w_position;
+      memcpy(item.buffer, &d2w_buffer[d2w_position], end1);
+      if (end2)
+        memcpy(&item.buffer[end1], d2w_buffer, end2);
+      xQueueSendFromISR(iwm_write_queue, &item, &woken);
+    }
+    d2w_writing = false;
+  }
+
+  return;
+}
+
+void iwm_diskii_ll::start(uint8_t drive, bool write_protect)
+{
+  if (write_protect) {
+    // Signal that disk is write protected
+    smartport.iwm_ack_set();
+  }
+  else {
+    // Signal that disk can be written to
+    smartport.iwm_ack_clr();
+
+    d2w_buflen = cspi_alloc_continuous(IWM_NUMBYTES_FOR_BITS(TRACK_LEN * 8, d2w_buffer),
+				       D2W_CHUNK_SIZE, &d2w_buffer, &d2w_desc);
+        
+    gpio_isr_handler_add(SP_WREQ, diskii_write_handler_forwarder, (void *) this);
+
+    cspi_begin_continuous(smartport.spirx, d2w_desc);
+    d2w_started = true;
+  }
+
   diskii_xface.set_output_to_rmt();
   diskii_xface.enable_output();
   ESP_ERROR_CHECK(fnRMT.rmt_write_bitstream(RMT_TX_CHANNEL, track_buffer, track_numbits, track_bit_period));
@@ -840,6 +945,15 @@ void iwm_diskii_ll::stop()
 {
   fnRMT.rmt_tx_stop(RMT_TX_CHANNEL);
   diskii_xface.disable_output();
+  if (d2w_started) {
+    cspi_end_continuous(smartport.spirx);
+    d2w_started = false;
+    heap_caps_free(d2w_desc);
+    heap_caps_free(d2w_buffer);
+    // Let SmartPort use write protect as ACK line again
+    smartport.iwm_ack_set();
+  }
+  gpio_isr_handler_remove(SP_WREQ);
   fnLedManager.set(LED_BUS, false);
   Debug_printf("\nstop diskII");
 }
@@ -982,11 +1096,13 @@ void IRAM_ATTR encode_rmt_bitstream(const void* src, rmt_item32_t* dest, size_t 
 
 
 /*
- * Initialize the RMT Tx channel
+ * Initialize the RMT Tx channel and SPI Rx channel
  */
 void iwm_diskii_ll::setup_rmt()
 {
-#define RMT_TX_CHANNEL rmt_channel_t::RMT_CHANNEL_0
+  // SPI continuous
+  iwm_write_queue = xQueueCreate(10, sizeof(iwm_write_data));
+
   track_buffer = (uint8_t *)heap_caps_malloc(TRACK_LEN, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (track_buffer == NULL)
     Debug_println("could not allocate track buffer");

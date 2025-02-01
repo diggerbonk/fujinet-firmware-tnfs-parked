@@ -1389,9 +1389,11 @@ void rs232Fuji::rs232_set_rs232_external_clock()
 // Mounts the desired boot disk number
 void rs232Fuji::insert_boot_device(uint8_t d)
 {
-    const char *config_atr = "/autorun.atr";
-    const char *mount_all_atr = "/mount-and-boot.atr";
+    const char *config_atr = "/autorun.img";
+    const char *mount_all_atr = "/mount-and-boot.img";
     FILE *fBoot;
+
+    Debug_printf("rs232Fuji::insert_boot_device(%u)\n",d);
 
     _bootDisk.unmount();
 
@@ -1399,13 +1401,15 @@ void rs232Fuji::insert_boot_device(uint8_t d)
     {
     case 0:
         fBoot = fsFlash.file_open(config_atr);
-        _bootDisk.mount(fBoot, config_atr, 0);
+        _bootDisk.mount(fBoot, config_atr, 368640);
         break;
     case 1:
         fBoot = fsFlash.file_open(mount_all_atr);
-        _bootDisk.mount(fBoot, mount_all_atr, 0);
+        _bootDisk.mount(fBoot, mount_all_atr, 368640);
         break;
     }
+
+    Debug_printf("Mounted.\n");
 
     _bootDisk.is_config_device = true;
     _bootDisk.device_active = false;
@@ -1470,9 +1474,11 @@ rs232Disk *rs232Fuji::bootdisk()
 
 void rs232Fuji::rs232_test()
 {
+    uint8_t buf[512];
+
     Debug_printf("rs232_test()\n");
-    vTaskDelay(1);
-    rs232_complete();
+    memset(buf,'A',512);
+    bus_to_computer(buf,512,false);
 }
 
 void rs232Fuji::rs232_process(uint32_t commanddata, uint8_t checksum)
@@ -1623,6 +1629,11 @@ void rs232Fuji::rs232_process(uint32_t commanddata, uint8_t checksum)
     case FUJICMD_ENABLE_UDPSTREAM:
         rs232_ack();
         rs232_enable_udpstream();
+        break;
+    case FUJICMD_DEVICE_READY:
+        Debug_printf("FUJICMD DEVICE TEST\n");
+        rs232_ack();
+        rs232_test();
         break;
     default:
         rs232_nak();

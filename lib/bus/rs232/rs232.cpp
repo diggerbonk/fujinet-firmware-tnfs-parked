@@ -184,18 +184,10 @@ void systemBus::_rs232_process_cmd()
         if (tempFrame.device == RS232_DEVICEID_DISK && _fujiDev != nullptr && _fujiDev->boot_config)
         {
             _activeDev = _fujiDev->bootdisk();
-            if (_activeDev->status_wait_count > 0 && tempFrame.comnd == 'R' && _fujiDev->status_wait_enabled)
-            {
-                Debug_printf("Disabling CONFIG boot.\n");
-                _fujiDev->boot_config = false;
-                return;
-            }
-            else
-            {
-                Debug_println("FujiNet CONFIG boot");
-                // handle command
-                _activeDev->rs232_process(tempFrame.commanddata, tempFrame.checksum);
-            }
+
+            Debug_println("FujiNet CONFIG boot");
+            // handle command
+            _activeDev->rs232_process(tempFrame.commanddata, tempFrame.checksum);
         }
         else
         {
@@ -297,11 +289,11 @@ void systemBus::setup()
     // Set up UART
     fnUartBUS.begin(_rs232Baud);
 
-    // INT PIN
-    fnSystem.set_pin_mode(PIN_RS232_RI, gpio_mode_t::GPIO_MODE_OUTPUT_OD, SystemManager::pull_updown_t::PULL_UP);
-    fnSystem.digital_write(PIN_RS232_RI, DIGI_HIGH);
+    // // INT PIN
+    // fnSystem.set_pin_mode(PIN_RS232_RI, gpio_mode_t::GPIO_MODE_OUTPUT_OD, SystemManager::pull_updown_t::PULL_UP);
+    // fnSystem.digital_write(PIN_RS232_RI, DIGI_HIGH);
     // PROC PIN
-    fnSystem.set_pin_mode(PIN_RS232_RI, gpio_mode_t::GPIO_MODE_OUTPUT_OD, SystemManager::pull_updown_t::PULL_UP);
+    fnSystem.set_pin_mode(PIN_RS232_RI, gpio_mode_t::GPIO_MODE_OUTPUT, SystemManager::pull_updown_t::PULL_UP);
     fnSystem.digital_write(PIN_RS232_RI, DIGI_HIGH);
     // INVALID PIN
     //fnSystem.set_pin_mode(PIN_RS232_INVALID, PINMODE_INPUT | PINMODE_PULLDOWN); // There's no PULLUP/PULLDOWN on pins 34-39
@@ -416,7 +408,7 @@ void systemBus::toggleBaudrate()
     if (useUltraHigh == true)
         baudrate = _rs232Baud == RS232_BAUDRATE ? _rs232BaudUltraHigh : RS232_BAUDRATE;
 
-    Debug_printf("Toggling baudrate from %d to %d\n", _rs232Baud, baudrate);
+    // Debug_printf("Toggling baudrate from %d to %d\n", _rs232Baud, baudrate);
     _rs232Baud = baudrate;
     fnUartBUS.set_baudrate(_rs232Baud);
 }

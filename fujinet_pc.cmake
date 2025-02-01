@@ -37,20 +37,20 @@ endif()
 if(FUJINET_TARGET STREQUAL "APPLE")
     ######################## SLIP PROTOCOL PROCESSING
     set(SLIP_PROTOCOL "NET" CACHE STRING "Select the protocol type (NET or COM)")
-    
+
     set_property(CACHE SLIP_PROTOCOL PROPERTY STRINGS "NET" "COM")
-    
+
     if(NOT SLIP_PROTOCOL STREQUAL "NET" AND NOT SLIP_PROTOCOL STREQUAL "COM")
       message(FATAL_ERROR "Invalid value for SLIP_PROTOCOL: ${SLIP_PROTOCOL}. Please choose either NET or COM.")
     endif()
-    
+
     # convert to values for C++ code to use as macros
     if(SLIP_PROTOCOL STREQUAL "NET")
         add_compile_definitions(SLIP_PROTOCOL_NET=1)
     elseif(SLIP_PROTOCOL STREQUAL "COM")
         add_compile_definitions(SLIP_PROTOCOL_COM=1)
     endif()
-    
+
     message(STATUS "SLIP_PROTOCOL is ${SLIP_PROTOCOL}")
     ################################################
 endif()
@@ -118,12 +118,12 @@ if(DEFINED DEBUG_NO_REBOOT)
 endif()
 
 set(INCLUDE_DIRS include
-    lib/compat lib/config lib/utils lib/hardware
+    lib/compat lib/config lib/utils lib/hardware lib/clock
     lib/FileSystem
     lib/tcpip lib/ftp lib/TNFSlib lib/telnet lib/fnjson
     lib/webdav lib/http lib/sam lib/task
     lib/modem-sniffer lib/printer-emulator
-    lib/network-protocol 
+    lib/network-protocol
     lib/fuji lib/bus lib/device lib/media
     lib/encrypt lib/base64
     lib/devrelay/commands lib/devrelay/service lib/devrelay/slip lib/devrelay/types
@@ -152,7 +152,8 @@ set(SOURCES src/main.cpp
     lib/config/fnc_serial.cpp
     lib/config/fnc_util.cpp
     lib/config/fnc_wifi.cpp
-    include/debug.h 
+    include/debug.h
+    lib/clock/Clock.h lib/clock/Clock.cpp
     lib/utils/utils.h lib/utils/utils.cpp
     lib/utils/cbuf.h lib/utils/cbuf.cpp
     lib/utils/string_utils.h lib/utils/string_utils.cpp
@@ -247,6 +248,8 @@ set(SOURCES src/main.cpp
     lib/media/media.h
     lib/encoding/base64.h lib/encoding/base64.cpp
     lib/encoding/hash.h lib/encoding/hash.cpp
+    lib/qrcode/qrcode.h lib/qrcode/qrcode.c
+    lib/qrcode/qrmanager.h lib/qrcode/qrmanager.cpp
     lib/encrypt/crypt.h lib/encrypt/crypt.cpp
     lib/compat/compat_inet.c
     lib/compat/compat_gettimeofday.h lib/compat/compat_gettimeofday.c
@@ -262,7 +265,7 @@ if(FUJINET_TARGET STREQUAL "ATARI")
     lib/bus/sio/siocom/fnSioCom.h lib/bus/sio/siocom/fnSioCom.cpp
     lib/media/atari/diskType.h lib/media/atari/diskType.cpp
     lib/media/atari/diskTypeAtr.h lib/media/atari/diskTypeAtr.cpp
-    lib/media/atari/diskTypeAtx.h 
+    lib/media/atari/diskTypeAtx.h
     lib/media/atari/diskTypeXex.h lib/media/atari/diskTypeXex.cpp
 
     lib/device/sio/disk.h lib/device/sio/disk.cpp
@@ -273,7 +276,7 @@ if(FUJINET_TARGET STREQUAL "ATARI")
     lib/device/sio/network.h lib/device/sio/network.cpp
     lib/device/sio/udpstream.h lib/device/sio/udpstream.cpp
     #lib/device/sio/voice.h lib/device/sio/voice.cpp
-    lib/device/sio/apetime.h lib/device/sio/apetime.cpp
+    lib/device/sio/clock.h lib/device/sio/clock.cpp
     lib/device/sio/siocpm.h lib/device/sio/siocpm.cpp
     lib/device/sio/pclink.h lib/device/sio/pclink.cpp
     lib/device/sio/modem.h lib/device/sio/modem.cpp
@@ -300,7 +303,6 @@ if(FUJINET_TARGET STREQUAL "APPLE")
     lib/devrelay/commands/Close.h lib/devrelay/commands/Close.cpp
     lib/devrelay/commands/ReadBlock.h lib/devrelay/commands/ReadBlock.cpp
     lib/devrelay/commands/Read.h lib/devrelay/commands/Read.cpp
-    lib/devrelay/commands/Reset.h lib/devrelay/commands/Reset.cpp
     lib/devrelay/commands/Open.h lib/devrelay/commands/Open.cpp
     lib/devrelay/commands/Format.h lib/devrelay/commands/Format.cpp
     lib/devrelay/commands/Write.h lib/devrelay/commands/Write.cpp
@@ -351,7 +353,7 @@ if(FUJINET_TARGET STREQUAL "COCO")
     lib/media/drivewire/mediaType.h lib/media/drivewire/mediaType.cpp
     lib/media/drivewire/mediaTypeDSK.h lib/media/drivewire/mediaTypeDSK.cpp
     lib/media/drivewire/mediaTypeMRM.h lib/media/drivewire/mediaTypeMRM.cpp
-    
+
     lib/device/drivewire/fuji.h lib/device/drivewire/fuji.cpp
     lib/device/drivewire/network.h lib/device/drivewire/network.cpp
     lib/device/drivewire/dload.h lib/device/drivewire/dload.cpp
@@ -496,7 +498,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:fujinet> dist
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${BUILD_DATA_DIR} dist/data
         # DLL's TODO how to make this using cmake?
-        COMMAND ldd $<TARGET_FILE:fujinet> | grep -v -i '/windows' 
+        COMMAND ldd $<TARGET_FILE:fujinet> | grep -v -i '/windows'
         | awk '{print $$3}' | xargs -I {} cp -p {} dist
     )
 else()

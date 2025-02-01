@@ -1,9 +1,12 @@
+#include "fujiCmd.h"
+#include "httpService.h"
 #ifdef BUILD_ATARI
 
 #include "fuji.h"
 
 #ifdef ESP_PLATFORM
 #include <driver/ledc.h>
+#include "../../../include/PSRAMAllocator.h"
 #endif
 
 #include <cstdint>
@@ -13,13 +16,11 @@
 #include <libgen.h>
 #endif
 #include <map>
+#include <new>
 #include <vector>
 #include "compat_string.h"
 
 #include "../../../include/debug.h"
-#ifdef ESP_PLATFORM
-#include "../../../include/PSRAMAllocator.h"
-#endif
 
 #include "fnSystem.h"
 #include "fnConfig.h"
@@ -33,13 +34,17 @@
 
 #include "base64.h"
 #include "hash.h"
+#include "../../qrcode/qrmanager.h"
 
 #define ADDITIONAL_DETAILS_BYTES 10
 
 sioFuji theFuji; // global fuji device object
 
-// sioDisk sioDiskDevs[MAX_HOSTS];
-sioNetwork *sioNetDevs[MAX_NETWORK_DEVICES];
+#ifdef ESP_PLATFORM
+std::unique_ptr<sioNetwork, PSRAMDeleter<sioNetwork>> sioNetDevs[MAX_NETWORK_DEVICES];
+#else
+std::unique_ptr<sioNetwork> sioNetDevs[MAX_NETWORK_DEVICES];
+#endif
 
 bool _validate_host_slot(uint8_t slot, const char *dmsg = nullptr);
 bool _validate_device_slot(uint8_t slot, const char *dmsg = nullptr);
@@ -131,35 +136,29 @@ sioFuji::sioFuji()
     for (int i = 0; i < MAX_HOSTS; i++)
         _fnHosts[i].slotid = i;
 
-    for (int i = 0; i < MAX_NETWORK_DEVICES; i++)
-    {
 #ifdef ESP_PLATFORM
-        void *p = heap_caps_malloc(sizeof(sioNetwork), MALLOC_CAP_DEFAULT);
-#else
-        void *p = malloc(sizeof(sioNetwork));
-#endif
-        if (p == nullptr)
-            Debug_printf("sioFuji::sioFuji - Unable to allocate memory.\n");
-
-        sioNetDevs[i] = new(p) sioNetwork();
-    }
-}
-
-sioFuji::~sioFuji()
-{
-    for (int i=0; i < MAX_NETWORK_DEVICES; i++)
+    for (int i = 0; i < MAX_NETWORK_DEVICES; ++i)
     {
-        if (sioNetDevs[i] != nullptr)
+        PSRAMAllocator<sioNetwork> allocator;
+        sioNetwork* ptr = allocator.allocate(1); // Allocate memory for one sioNetwork object
+
+        if (ptr != nullptr)
         {
-            sioNetDevs[i]->~sioNetwork(); // call destructor
-#ifdef ESP_PLATFORM
-            heap_caps_free(sioNetDevs[i]);
-#else
-            free(sioNetDevs[i]);
-#endif
-            sioNetDevs[i] = nullptr;
+            new (ptr) sioNetwork(); // Construct the object using placement new
+            sioNetDevs[i] = std::unique_ptr<sioNetwork, PSRAMDeleter<sioNetwork>>(ptr); // Store in smart pointer
         }
     }
+#else
+    for (int i = 0; i < MAX_NETWORK_DEVICES; i++)
+    {
+        sioNetwork *ptr = (sioNetwork *) malloc(sizeof(sioNetwork));
+        if (ptr != nullptr) {
+            new (ptr) sioNetwork();
+            sioNetDevs[i] = std::unique_ptr<sioNetwork>(ptr);
+        }
+    }
+#endif
+
 }
 
 // Status
@@ -555,6 +554,9 @@ void sioFuji::sio_copy_file()
     char *dataBuf;
     unsigned char sourceSlot;
     unsigned char destSlot;
+#ifndef ESP_PLATFORM
+    uint64_t poll_ts = fnSystem.millis();
+#endif
 
     dataBuf = (char *)malloc(532);
 
@@ -649,6 +651,13 @@ void sioFuji::sio_copy_file()
     bool err = false;
     do
     {
+#ifndef ESP_PLATFORM
+        if (fnSioCom.get_sio_mode() == SioCom::sio_mode::NETSIO && fnSystem.millis() - poll_ts > 1000)
+        {
+            fnSioCom.poll(1);
+            poll_ts = fnSystem.millis();
+        }
+#endif
         readCount = fnio::fread(dataBuf, 1, 532, sourceFile);
         readTotal += readCount;
         // Check if we got enough bytes on the read
@@ -2172,9 +2181,7 @@ void sioFuji::setup(systemBus *siobus)
         _sio_bus->addDevice(&_fnDisks[i].disk_dev, SIO_DEVICEID_DISK + i);
 
     for (int i = 0; i < MAX_NETWORK_DEVICES; i++)
-    {
-        _sio_bus->addDevice(sioNetDevs[i], SIO_DEVICEID_FN_NETWORK + i);
-    }
+        _sio_bus->addDevice(sioNetDevs[i].get(), SIO_DEVICEID_FN_NETWORK + i);
 
     _sio_bus->addDevice(&_cassetteDev, SIO_DEVICEID_CASSETTE);
     cassette()->set_buttons(Config.get_cassette_buttons());
@@ -2185,6 +2192,142 @@ sioDisk *sioFuji::bootdisk()
 {
     return &_bootDisk;
 }
+
+
+
+
+
+
+void sioFuji::sio_qrcode_input()
+{
+    uint16_t len = sio_get_aux();
+
+    Debug_printf("FUJI: QRCODE INPUT (len: %d)\n", len);
+
+    if (!len)
+    {
+        Debug_printf("Invalid length. Aborting");
+        sio_error();
+        return;
+    }
+
+    std::vector<unsigned char> p(len);
+    bus_to_peripheral(p.data(), len);
+    qrManager.in_buf += std::string((const char *)p.data(), len);
+    sio_complete();
+}
+
+void sioFuji::sio_qrcode_encode()
+{
+    size_t out_len = 0;
+
+    uint16_t aux = sio_get_aux();
+    qrManager.version = aux;
+    qrManager.ecc_mode = (aux >> 8) & 0b00000011;
+    bool shorten = (aux >> 12) & 0b00000001;
+
+    Debug_printf("FUJI: QRCODE ENCODE\n");
+    Debug_printf("QR Version: %d, ECC: %d, Shorten: %s\n", qrManager.version, qrManager.ecc_mode, shorten ? "Y" : "N");
+
+    std::string url = qrManager.in_buf;
+
+    if (shorten) {
+        url = fnHTTPD.shorten_url(url);
+    }
+
+    std::vector<uint8_t> p = QRManager::encode(
+        url.c_str(),
+        url.size(),
+        qrManager.version,
+        qrManager.ecc_mode,
+        &out_len
+    );
+
+    if (!out_len)
+    {
+        Debug_printf("QR code encoding failed\n");
+        sio_error();
+        return;
+    }
+
+    qrManager.in_buf.clear();
+
+    Debug_printf("Resulting QR code is: %u modules\n", out_len);
+    sio_complete();
+}
+
+void sioFuji::sio_qrcode_length()
+{
+    Debug_printf("FUJI: QRCODE LENGTH\n");
+    uint8_t output_mode = sio_get_aux();
+
+    // A bit gross to have a side effect from length command, but not enough aux bytes
+    // to specify version, ecc, *and* output mode for the encode command. Also can't
+    // just wait for output command, because output mode determines buffer length,
+    if (output_mode != qrManager.output_mode) {
+        if (output_mode == QR_OUTPUT_MODE_BITS) {
+            qrManager.to_bits();
+        }
+        if (output_mode == QR_OUTPUT_MODE_ATASCII) {
+            qrManager.to_atascii();
+        }
+        qrManager.output_mode = output_mode;
+    }
+
+    size_t l = qrManager.out_buf.size();
+
+    uint8_t response[4] = {
+        (uint8_t)(l >>  0),
+        (uint8_t)(l >>  8),
+        (uint8_t)(l >>  16),
+        (uint8_t)(l >>  24)
+    };
+
+    if (!l)
+    {
+        Debug_printf("QR code buffer is 0 bytes, sending error.\n");
+        bus_to_computer(response, sizeof(response), true);
+    }
+
+    Debug_printf("QR code buffer length: %u bytes\n", l);
+
+    bus_to_computer(response, sizeof(response), false);
+}
+
+void sioFuji::sio_qrcode_output()
+{
+    Debug_printf("FUJI: QRCODE OUTPUT\n");
+
+    size_t len = sio_get_aux();
+
+    if (!len)
+    {
+        Debug_printf("Refusing to send a zero byte buffer. Aborting\n");
+        return;
+    }
+    else if (len > qrManager.out_buf.size())
+    {
+        Debug_printf("Requested %u bytes, but buffer is only %u bytes, aborting.\n", len, qrManager.out_buf.size());
+        return;
+    }
+    else
+    {
+        Debug_printf("Requested %u bytes\n", len);
+    }
+
+    bus_to_computer(&qrManager.out_buf[0], len, false);
+
+    qrManager.out_buf.erase(qrManager.out_buf.begin(), qrManager.out_buf.begin()+len);
+    qrManager.out_buf.shrink_to_fit();
+
+}
+
+
+
+
+
+
+
 
 void sioFuji::sio_base64_encode_input()
 {
@@ -2601,6 +2744,22 @@ void sioFuji::sio_process(uint32_t commanddata, uint8_t checksum)
     case FUJICMD_ENABLE_UDPSTREAM:
         sio_late_ack();
         sio_enable_udpstream();
+        break;
+    case FUJICMD_QRCODE_INPUT:
+        sio_ack();
+        sio_qrcode_input();
+        break;
+    case FUJICMD_QRCODE_ENCODE:
+        sio_ack();
+        sio_qrcode_encode();
+        break;
+    case FUJICMD_QRCODE_LENGTH:
+        sio_ack();
+        sio_qrcode_length();
+        break;
+    case FUJICMD_QRCODE_OUTPUT:
+        sio_ack();
+        sio_qrcode_output();
         break;
     case FUJICMD_BASE64_ENCODE_INPUT:
         sio_late_ack();

@@ -28,11 +28,39 @@ CMAKE_GENERATOR=""
 INI_FILE="${SCRIPT_DIR}/platformio-generated.ini"
 LOCAL_INI_VALUES_FILE="${SCRIPT_DIR}/platformio.local.ini"
 
+# Function to check if the specified Python version is 3
+check_python_version() {
+  local python_bin=$1
+
+  if ! command -v "${python_bin}" &> /dev/null; then
+    return 1
+  fi
+
+  # Extract the major version number
+  local major_version="$(${python_bin} --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1)"
+
+  # Verify if it's Python 3
+  if [ "${major_version}" -eq 3 ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Check if "python" exists first since that's what PlatformIO names it
+PYTHON=python
+if ! check_python_version "${PYTHON}" ; then
+  PYTHON=python3
+  if ! check_python_version "${PYTHON}" ; then
+    echo "Python 3 is not installed"
+    exit 1
+  fi
+fi
+
 function display_board_names {
   while IFS= read -r piofile; do
-    BASE_NAME=$(basename $piofile)
-    BOARD_NAME=$(echo ${BASE_NAME//.ini} | cut -d\- -f2-)
-    echo "$(basename $piofile)"
+    BOARD_NAME=$(echo $(basename $piofile) | sed 's#^platformio-##;s#.ini$##')
+    echo "$BOARD_NAME"
   done < <(find "$SCRIPT_DIR/build-platforms" -name 'platformio-*.ini' -print | sort)
 }
 
@@ -76,6 +104,7 @@ function show_help {
   echo "    ./build.sh -cb        # for CLEAN + BUILD of current target in platformio-local.ini"
   echo "    ./build.sh -m         # View FujiNet Monitor"
   echo "    ./build.sh -cbum      # Clean/Build/Upload to FN/Monitor"
+  echo "    ./build.sh -f         # Upload filesystem"
   echo ""
   echo "Supported boards:"
   echo ""
@@ -152,7 +181,7 @@ if [ ! -z "$PC_TARGET" ] ; then
   if [ $DO_CLEAN -eq 1 ] ; then
     echo "Removing old build artifacts"
     rm -rf $SCRIPT_DIR/build/*
-    rm $SCRIPT_DIR/build/.ninja* 2>/dev/null
+    rm -f $SCRIPT_DIR/build/.ninja* 2>/dev/null
   fi
 
   cd $SCRIPT_DIR/build
@@ -161,6 +190,10 @@ if [ ! -z "$PC_TARGET" ] ; then
     cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"
   else
     cmake "$GEN_CMD" .. -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"
+  fi
+  if [ $? -ne 0 ]; then
+    echo "cmake failed writing compile commands. Exiting"
+    exit 1
   fi
   # Run the specific build
   BUILD_TYPE="Release"
@@ -182,10 +215,10 @@ if [ ! -z "$PC_TARGET" ] ; then
   # python_modules.txt contains pairs of module name and installable package names, separated by pipe symbol
   MOD_LIST=$(sed '/^#/d' < "${SCRIPT_DIR}/python_modules.txt" | cut -d\| -f1 | tr '\n' ' ' | sed 's# *$##;s# \{1,\}# #g')
   echo "Checking python modules installed: $MOD_LIST"
-  python -c "import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(mod.strip()) for mod in '''$MOD_LIST'''.split()) else 1)"
+  ${PYTHON} -c "import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(mod.strip()) for mod in '''$MOD_LIST'''.split()) else 1)"
   if [ $? -eq 1 ] ; then
     echo "At least one of the required python modules is missing"
-    sh ${SCRIPT_DIR}/install_python_modules.sh
+    bash ${SCRIPT_DIR}/install_python_modules.sh
   fi
 
   cmake --build .
@@ -226,14 +259,14 @@ if [ -z "$SETUP_NEW_BOARD" ] ; then
   fi
 
   if [ ${ZIP_MODE} -eq 1 ] ; then
-    python create-platformio-ini.py -o $INI_FILE -l $LOCAL_INI_VALUES_FILE -f platformio-ini-files/platformio.zip-options.ini
+    ${PYTHON} create-platformio-ini.py -o $INI_FILE -l $LOCAL_INI_VALUES_FILE -f platformio-ini-files/platformio.zip-options.ini
   else
-    python create-platformio-ini.py -o $INI_FILE -l $LOCAL_INI_VALUES_FILE
+    ${PYTHON} create-platformio-ini.py -o $INI_FILE -l $LOCAL_INI_VALUES_FILE
   fi
   create_result=$?
 else
   # this will create a clean platformio INI file, but honours the command line args
-  if [ $ANSWER_YES -eq 0 ] ; then
+  if [ -e ${LOCAL_INI_VALUES_FILE} -a $ANSWER_YES -eq 0 ] ; then
     echo "WARNING! This will potentially overwrite any local changes in $LOCAL_INI_VALUES_FILE"
     echo -n "Do you want to proceed? (y|N) "
     read answer
@@ -244,9 +277,9 @@ else
     fi
   fi
   if [ ${ZIP_MODE} -eq 1 ] ; then
-    python create-platformio-ini.py -n $SETUP_NEW_BOARD -o $INI_FILE -l $LOCAL_INI_VALUES_FILE -f platformio-ini-files/platformio.zip-options.ini
+    ${PYTHON} create-platformio-ini.py -n $SETUP_NEW_BOARD -o $INI_FILE -l $LOCAL_INI_VALUES_FILE -f platformio-ini-files/platformio.zip-options.ini
   else
-    python create-platformio-ini.py -n $SETUP_NEW_BOARD -o $INI_FILE -l $LOCAL_INI_VALUES_FILE
+    ${PYTHON} create-platformio-ini.py -n $SETUP_NEW_BOARD -o $INI_FILE -l $LOCAL_INI_VALUES_FILE
   fi
 
   create_result=$?
@@ -303,6 +336,10 @@ AUTOCLEAN_ARG=""
 if [ ${AUTOCLEAN} -eq 0 ] ; then
   AUTOCLEAN_ARG="--disable-auto-clean"
 fi
+
+# any stage that fails from this point should stop the script immediately, as they are designed to run
+# on from each other sequentially as long as the previous passed.
+set -e
 
 if [ ${RUN_BUILD} -eq 1 ] ; then
   pio run -c $INI_FILE ${DEV_MODE_ARG} $ENV_ARG $TARGET_ARG $AUTOCLEAN_ARG 2>&1
