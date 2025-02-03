@@ -66,9 +66,16 @@ bool fujiMenu::set_pos(uint16_t newPos)
     return true;
 }
 
-uint16_t fujiMenu::decode_menutype(const char * buf)
+int16_t fujiMenu::decode_menutype(const char * buf, int numDigits)
 {
-    return (uint16_t)strtol(buf, nullptr, 16);
+    int16_t retval = 0;
+    int mult = 1;
+    for (int i = (numDigits-1); i >= 0; i--) {
+        if (buf[i] < 48 || buf[i] > 57) return -1;
+        retval += ((buf[i]-48)*mult);
+        mult = (mult*10);
+    }
+    return retval;
 }
 
 fsdir_entry_t * fujiMenu::next_menu_entry() 
@@ -97,7 +104,10 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
         _current_pos += 1;
         _current_offset += strlen(tempBuf);
 
-        // menu format: [<type>|]<name>[|<item>]
+        // menu line format:
+        // 
+        // <menu-item> ::= <options> "|" <resource>
+        // <options>   ::= <type> "|" | <type> "|" <friendly-name> "|"
 
         int len = strlen(tempBuf);
 
@@ -108,23 +118,29 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
         else return nullptr;
 
         char * pt = strchr(tempBuf, '|');
-        if (pt && (pt - tempBuf) < 5)
+        if (pt && ((pt - tempBuf) < 5))
         {
-            nameStart = pt-tempBuf+1;
-            _name_len = len+1;
-            _type = decode_menutype(tempBuf);
+            _type = decode_menutype(tempBuf, (pt - tempBuf));
+            if (_type >= 0) {
+                nameStart = pt-tempBuf+1;
+                _name_len = len+1;
 
-            pt = strchr(&tempBuf[nameStart], '|');
-            if (pt)
-            {
-                _name_len = (pt - (tempBuf + nameStart));
-                itemStart = 4 + _name_len;
-                _item_len = len - itemStart;
+                pt = strchr(&tempBuf[nameStart], '|');
+                if (pt)
+                {
+                    _name_len = (pt - (tempBuf + nameStart));
+                    itemStart = 4 + _name_len;
+                    _item_len = len - itemStart;
+                }
+                else
+                {
+                    itemStart = nameStart;
+                    _name_len = len - nameStart;
+                    _item_len = _name_len;
+                }
             }
-            else
-            {
-                itemStart = nameStart;
-                _name_len = len - nameStart;
+            else {
+                _name_len = len;
                 _item_len = _name_len;
             }
         }

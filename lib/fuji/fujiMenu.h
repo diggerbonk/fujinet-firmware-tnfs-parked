@@ -30,7 +30,7 @@ private:
     char _name[MAX_MENU_NAME_LEN];
     uint8_t _item_len = 0;
     char _item[MAX_MENU_ITEM_LEN];
-    uint16_t decode_menutype(const char * buf);
+    int16_t decode_menutype(const char * buf, int numDigits);
 
 public:
 
