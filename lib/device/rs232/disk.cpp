@@ -33,6 +33,7 @@ extern rs232Fuji theFuji;
 rs232Disk::rs232Disk()
 {
     device_active = false;
+    mount_time = 0;
 }
 
 // Read disk data and send to computer
@@ -49,13 +50,6 @@ void rs232Disk::rs232_read()
     uint16_t readcount;
 
     bool err = _disk->read(UINT16_FROM_HILOBYTES(cmdFrame.aux2, cmdFrame.aux1), &readcount);
-
-    for (int i=0;i<512;i++)
-    {
-        Debug_printf("%02X ",_disk->_disk_sectorbuff[i]);
-    }
-
-    Debug_printf("\n\n");
     
     // Send result to Atari
     bus_to_computer(_disk->_disk_sectorbuff, readcount, err);
@@ -225,6 +219,7 @@ mediatype_t rs232Disk::mount(FILE *f, const char *filename, uint32_t disksize, m
     case MEDIATYPE_UNKNOWN:
     default:
         device_active = true;
+	mount_time = time(NULL);
         _disk = new MediaTypeImg();
         return _disk->mount(f, disksize);
     }
@@ -249,6 +244,7 @@ void rs232Disk::unmount()
     {
         _disk->unmount();
         device_active = false;
+	mount_time = 0;
     }
 }
 
