@@ -42,6 +42,14 @@ enum fsType
     FSTYPE_COUNT
 };
 
+enum resourceType
+{
+    RESOURCE_TYPE_TEXT = 0,
+    RESOURCE_TYPE_FOLDER,
+    RESOURCE_TYPE_LINK,
+    RESOURCE_TYPE_FILE
+};
+
 #define DIR_OPTION_DESCENDING 0x0001 // Sort descending, not ascending
 #define DIR_OPTION_FILEDATE 0x0002 // Sort by date, not name
 
@@ -51,7 +59,7 @@ struct fsdir_entry
     bool isDir;
     uint32_t size;
     time_t modified_time;
-    uint8_t menu_type;
+    uint8_t resourceType;
 };
 typedef struct fsdir_entry fsdir_entry_t;
 

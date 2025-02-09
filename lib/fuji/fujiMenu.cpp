@@ -81,7 +81,7 @@ int16_t fujiMenu::decode_menutype(const char * buf, int numDigits)
 fsdir_entry_t * fujiMenu::next_menu_entry() 
 {
     char tempBuf[MAX_MENU_LINE_LEN];
-    _type = MENU_TYPE_TEXT;
+    _type = RESOURCE_TYPE_TEXT;
     _name_len = 0;
     _item_len = 0;
     memset(_name, 0, MAX_MENU_NAME_LEN);
@@ -104,10 +104,7 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
         _current_pos += 1;
         _current_offset += strlen(tempBuf);
 
-        // menu line format:
-        // 
-        // <menu-item> ::= <options> "|" <resource>
-        // <options>   ::= <type> "|" | <type> "|" <friendly-name> "|"
+        // menu format: [<type>|]<name>[|<item>]
 
         int len = strlen(tempBuf);
 
@@ -158,10 +155,10 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
 
         // populate _direntry;
         strncpy(_direntry.filename, _item, MAX_PATHLEN);
-        _direntry.isDir = (_type == MENU_TYPE_FOLDER);
+        _direntry.isDir = (_type == RESOURCE_TYPE_FOLDER);
         _direntry.size = 0;
         _direntry.modified_time = 0;
-        _direntry.menu_type = _type;
+        _direntry.resourceType = _type;
         return &_direntry;
     }
     else return nullptr;
