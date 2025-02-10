@@ -13,7 +13,7 @@
 
 bool fujiMenu::init(const char *path, FILE * mf)
 {
-    Debug_printf("fujiMenu::init, IN");
+    Debug_printf("fujiMenu::init, IN\r\n");
     release();
     _menu_file = mf;
     return true;
@@ -34,14 +34,14 @@ void fujiMenu::release()
 bool fujiMenu::set_pos(uint16_t newPos) 
 {
 
-    char tempBuf[MAX_MENU_LINE_LEN];
+    char tempBuf[TNFSMENU_MAX_LINE_LEN];
 
     // find the offset of the new menu position.
     _current_pos = 0;
     _current_offset = 0;
     int linelen = 0;
 
-    while (_current_pos < newPos && fgets(tempBuf, MAX_MENU_LINE_LEN, _menu_file)) 
+    while (_current_pos < newPos && fgets(tempBuf, TNFSMENU_MAX_LINE_LEN, _menu_file)) 
     {
 
         linelen = strlen(tempBuf);
@@ -50,12 +50,12 @@ bool fujiMenu::set_pos(uint16_t newPos)
         {
             break;
         }
-        else if ((_current_offset + linelen) > MAX_MENU_SIZE) {
-            Debug_printf("fujiMenu::init, truncating menu because it is over MAX_MENU_SIZE");
+        else if ((_current_offset + linelen) > TNFSMENU_MAX_SIZE) {
+            Debug_printf("fujiMenu::init, truncating menu because it is over TNFSMENU_MAX_SIZE\r\n");
             break;
         }
-        else if ((_current_pos + 1) > MAX_MENU_LINES) {
-            Debug_printf("fujiMenu::init, truncating menu because it is over MAX_MENU_LINES");
+        else if ((_current_pos + 1) > TNFSMENU_MAX_LINES) {
+            Debug_printf("fujiMenu::init, truncating menu because it is over TNFSMENU_MAX_LINES\r\n");
             break;
         }
 
@@ -68,6 +68,7 @@ bool fujiMenu::set_pos(uint16_t newPos)
 
 int16_t fujiMenu::decode_menutype(const char * buf, int numDigits)
 {
+    Debug_printf("fujiMenu decode menutype in\r\n");
     int16_t retval = 0;
     int mult = 1;
     for (int i = (numDigits-1); i >= 0; i--) {
@@ -75,103 +76,142 @@ int16_t fujiMenu::decode_menutype(const char * buf, int numDigits)
         retval += ((buf[i]-48)*mult);
         mult = (mult*10);
     }
+    Debug_printf("fujiMenu decode menutype out %i\r\n", retval);
     return retval;
 }
 
+/*
+ * Get the next menu item. Menu items have the format:
+ *
+ *     <type>|<resource>|<display name>
+ *
+ *     OR
+ *
+ *     <item resource>
+ *
+ * Where:
+ *
+ *     <type> is the numeric type ID of the menu item.
+ *     <resource> this is the name of the item as shoudl be displyed on screen
+ *     <displayname> screen friendly display name for the resource.
+ */
+
 fsdir_entry_t * fujiMenu::next_menu_entry() 
 {
-    char tempBuf[MAX_MENU_LINE_LEN];
+    char tempBuf[TNFSMENU_MAX_LINE_LEN];
+    char myBuf[TNFSMENU_MAX_LINE_LEN];
     _type = RESOURCE_TYPE_TEXT;
-    _name_len = 0;
-    _item_len = 0;
-    memset(_name, 0, MAX_MENU_NAME_LEN);
-    memset(_item, 0, MAX_MENU_ITEM_LEN);
-    uint8_t nameStart = 0;
-    uint8_t itemStart = 0;
+    _displayname_len = 0;
+    _resource_len = 0;
+    memset(_displayname, 0, TNFSMENU_MAX_DISPLAY_NAME);
+    memset(_resource, 0, TNFSMENU_MAX_RESOURCE);
+    uint8_t displayNameStart = 0;
+    uint8_t resourceStart = 0;
 
     // if we have an offset, skip to it. 
     if (_current_offset > 0) 
     {
         if (fseek(_menu_file, _current_offset, 0) != 0)
         {
-            Debug_printf("fujiMenu::get_next_menu_entry, cannot seek to current offset.");
+            Debug_printf("fujiMenu::next_menu_entry, cannot seek to current offset.\r\n");
             return nullptr;
         }
     }
 
-    if (fgets(tempBuf, MAX_MENU_LINE_LEN, _menu_file)) 
+    if (!fgets(tempBuf, TNFSMENU_MAX_LINE_LEN, _menu_file)) 
     {
-        _current_pos += 1;
-        _current_offset += strlen(tempBuf);
+        Debug_printf("fujiMenu::next_menu_entry, can't read next line from menu file\r\n");
+        return nullptr;
+    }
 
-        // menu format: [<type>|]<name>[|<item>]
+    _current_pos += 1;
+    _current_offset += strlen(tempBuf);
 
-        int len = strlen(tempBuf);
+    // menu format: [<type>|]<name>[|<item>]
 
-        if (len>0 && tempBuf[len-1] == '\n') {
-            tempBuf[len-1] = 0;
-            len--;
-        }
-        else return nullptr;
+    int len = strlen(tempBuf);
 
-        char * pt = strchr(tempBuf, '|');
-        if (pt && ((pt - tempBuf) < 5))
-        {
-            _type = decode_menutype(tempBuf, (pt - tempBuf));
-            if (_type >= 0) {
-                nameStart = pt-tempBuf+1;
-                _name_len = len+1;
-
-                pt = strchr(&tempBuf[nameStart], '|');
-                if (pt)
-                {
-                    _name_len = (pt - (tempBuf + nameStart));
-                    itemStart = 4 + _name_len;
-                    _item_len = len - itemStart;
-                }
-                else
-                {
-                    itemStart = nameStart;
-                    _name_len = len - nameStart;
-                    _item_len = _name_len;
-                }
-            }
-            else {
-                _name_len = len;
-                _item_len = _name_len;
-            }
-        }
-        else
-        {
-            _name_len = len;
-            _item_len = _name_len;
-        }
-
-        if (_name_len >= MAX_MENU_NAME_LEN) _name_len = MAX_MENU_NAME_LEN-1;
-        if (_item_len >= MAX_MENU_ITEM_LEN) _item_len = MAX_MENU_ITEM_LEN-1;
-
-        strncpy(_name, &tempBuf[nameStart], _name_len);
-        strncpy(_item, &tempBuf[itemStart], _item_len);
-
-        // populate _direntry;
-        strncpy(_direntry.filename, _item, MAX_PATHLEN);
-        _direntry.isDir = (_type == RESOURCE_TYPE_FOLDER);
-        _direntry.size = 0;
-        _direntry.modified_time = 0;
-        _direntry.resourceType = _type;
-        return &_direntry;
+    if (len>0 && tempBuf[len-1] == '\n') {
+        tempBuf[len-1] = 0;
+        len--;
     }
     else return nullptr;
+
+    int newBufPos = 0;
+    int offsets[4];
+    char lastChar = ' ';        
+    int count = 0;
+    _displayname_len = len;
+    _resource_len = len;
+
+    for (int i=0; i<len; i++) 
+    {
+        if (tempBuf[i] == '|' && lastChar != '\\') {
+            myBuf[newBufPos] = 0;
+            newBufPos++;
+            offsets[count] = newBufPos;
+            if (count == 0) {
+                displayNameStart = newBufPos;
+                _displayname_len = (len - newBufPos);
+                resourceStart = displayNameStart;
+                _resource_len = _displayname_len;
+            }
+            else if (count == 1) {
+                _displayname_len = (i - displayNameStart);
+                resourceStart = newBufPos;
+                _resource_len = (len - resourceStart);
+            }
+            count++;
+            lastChar = tempBuf[i];
+        }
+        else if (tempBuf[i] == '\\') {
+            lastChar = '\\';
+        }
+        else {
+            myBuf[newBufPos] = tempBuf[i];
+            newBufPos++;
+            lastChar = tempBuf[i];
+        }
+    }
+
+    if (count > 0) {
+        _type = decode_menutype(tempBuf, displayNameStart-1);
+    }
+
+    if (_debug) {
+        for (int i = 0; i < count; i++) {
+            Debug_printf("fujiMenu::read_menu_entry offset %i: %s\r\n", i,  &myBuf[offsets[i]]);
+        }
+    }
+
+    if (_displayname_len >= TNFSMENU_MAX_DISPLAY_NAME) _displayname_len = TNFSMENU_MAX_DISPLAY_NAME-1;
+    if (_resource_len >= TNFSMENU_MAX_RESOURCE) _resource_len = TNFSMENU_MAX_RESOURCE-1;
+
+    strncpy(_displayname, &myBuf[displayNameStart], _displayname_len);
+    strncpy(_resource, &myBuf[resourceStart], _resource_len);
+
+    if (_debug) {
+        Debug_printf("fujiMenu::read_menu_entry _displayname: %s\r\n", _displayname);
+        Debug_printf("fujiMenu::read_menu_entry _resource: %s\r\n", _resource);
+    }
+
+    // populate _direntry;
+    strncpy(_direntry.filename, _resource, MAX_PATHLEN);
+    _direntry.isDir = (_type == RESOURCE_TYPE_FOLDER);
+    _direntry.size = 0;
+    _direntry.modified_time = 0;
+    _direntry.resourceType = _type;
+    return &_direntry;
 }
 
-uint8_t fujiMenu::get_name(char * p)
+uint8_t fujiMenu::get_displayname(char * p)
 {
-    strcpy(p, _name);
-    return _name_len;
+    strcpy(p, _displayname);
+    return _displayname_len;
 }
 
-uint8_t fujiMenu::get_item(char *p)
+uint8_t fujiMenu::get_resource(char *p)
 {
-    strcpy(p, _item);
-    return _item_len;
+    strcpy(p, _resource);
+    return _resource_len;
 }

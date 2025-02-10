@@ -4,11 +4,11 @@
 #include <stdio.h>
 #include "fnFS.h"
 
-#define MAX_MENU_SIZE 65535
-#define MAX_MENU_NAME_LEN 80
-#define MAX_MENU_ITEM_LEN 168
-#define MAX_MENU_LINE_LEN MAX_PATHLEN
-#define MAX_MENU_LINES 4096
+#define TNFSMENU_MAX_SIZE 65535
+#define TNFSMENU_MAX_DISPLAY_NAME 80
+#define TNFSMENU_MAX_RESOURCE 168
+#define TNFSMENU_MAX_LINE_LEN MAX_PATHLEN
+#define TNFSMENU_MAX_LINES 4096
 
 class fujiMenu
 {
@@ -18,12 +18,13 @@ private:
     uint16_t _current_offset = 0;
     uint16_t _current_pos = 0;
     fsdir_entry _direntry;
+    bool _debug = false;;
 
     uint8_t _type = RESOURCE_TYPE_TEXT;
-    uint8_t _name_len = 0;
-    char _name[MAX_MENU_NAME_LEN];
-    uint8_t _item_len = 0;
-    char _item[MAX_MENU_ITEM_LEN];
+    uint8_t _displayname_len = 0;
+    char _displayname[TNFSMENU_MAX_DISPLAY_NAME];
+    uint8_t _resource_len = 0;
+    char _resource[TNFSMENU_MAX_RESOURCE];
     int16_t decode_menutype(const char * buf, int numDigits);
 
 public:
@@ -32,10 +33,10 @@ public:
     ~fujiMenu() {};
 
     uint16_t get_menu_entry_type() { return _type; };
-    uint8_t get_name_len() { return _name_len; };
-    uint8_t get_item_len() { return _item_len; };
-    uint8_t get_name(char * p);
-    uint8_t get_item(char * p);
+    uint8_t get_displayname_len() { return _displayname_len; };
+    uint8_t get_resource_len() { return _resource_len; };
+    uint8_t get_displayname(char * p);
+    uint8_t get_resource(char * p);
     bool init(const char *path, FILE * mf);
     void release();
     bool get_initialized() { return (_menu_file != nullptr); };
