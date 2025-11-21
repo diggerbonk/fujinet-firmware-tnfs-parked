@@ -1133,7 +1133,7 @@ void _set_additional_direntry_details(fsdir_entry_t *f, uint8_t *dest, uint8_t m
 
     dest[8] = f->isDir ? FF_DIR : 0;
 
-    maxlen -= 10; // Adjust the max return value with the number of additional bytes we're copying
+    maxlen -= 11; // Adjust the max return value with the number of additional bytes we're copying
     if (f->isDir) // Also subtract a byte for a terminating slash on directories
         maxlen--;
     if (strlen(f->filename) >= maxlen)
@@ -1141,6 +1141,9 @@ void _set_additional_direntry_details(fsdir_entry_t *f, uint8_t *dest, uint8_t m
 
     // File type
     dest[9] = MediaType::discover_disktype(f->filename);
+
+    // Resource Type
+    dest[10] = f->resourceType;
 }
 
 // TODO: VERIFY THIS CODE. THE STASH SEEMED CORRUPT
