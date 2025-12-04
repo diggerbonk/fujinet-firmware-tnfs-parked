@@ -1,3 +1,20 @@
+// Meatloaf - A Commodore 64/128 multi-device emulator
+// https://github.com/idolpx/meatloaf
+// Copyright(C) 2020 James Johnston
+//
+// Meatloaf is free software : you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Meatloaf is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Meatloaf. If not, see <http://www.gnu.org/licenses/>.
+
 #ifndef STRING_UTILS_H
 #define STRING_UTILS_H
 
@@ -29,9 +46,10 @@ namespace mstr {
     bool endsWith(std::string s, const char *pattern, bool case_sensitive = true);
 
     bool equals(std::string &s1, std::string &s2, bool case_sensitive = true);
-    bool equals(std::string &s1, char *s2, bool case_sensitive = true);
+    bool equals(std::string &s1, const char *s2, bool case_sensitive = true);
     bool equals(const char* s1, const char *s2, bool case_sensitive);
     bool contains(std::string &s1, const char *s2, bool case_sensitive = true);
+    bool contains(const char *s1, const char *s2, bool case_sensitive = true);
     bool compare(std::string &s1, std::string &s2, bool case_sensitive = true); // s1 is Wildcard string, s2 is potential match
 
     std::vector<std::string> split(std::string toSplit, char ch, int limit = 9999);
@@ -66,6 +84,7 @@ namespace mstr {
 
     bool isText(std::string &s);
     bool isNumeric(std::string &s);
+    bool isNumeric(char *s);
     bool isA0Space(int ch);
     bool isJunk(std::string &s);
     void A02Space(std::string &s);

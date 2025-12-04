@@ -5,31 +5,23 @@
  */
 
 #include "network.h"
+#include "../network.h"
 
 #include <cstring>
 #include <string>
 #include <algorithm>
 #include <vector>
 #include <memory>
+#include <sstream>
 
 #include "../../include/debug.h"
 #include "../../include/pinmap.h"
 
 #include "fnSystem.h"
 #include "utils.h"
+#include "fuji_endian.h"
 
 #include "status_error_codes.h"
-#include "TCP.h"
-#include "UDP.h"
-#include "Test.h"
-#include "Telnet.h"
-#include "TNFS.h"
-#include "FTP.h"
-#include "HTTP.h"
-#include "SSH.h"
-#include "SMB.h"
-
-#include "ProtocolParser.h"
 
 using namespace std;
 
@@ -122,9 +114,22 @@ void sioNetwork::sio_open()
 
     // persist aux1/aux2 values - NOTHING USES THEM!
     open_aux1 = cmdFrame.aux1;
-    open_aux2 = cmdFrame.aux2;
-    open_aux2 |= trans_aux2;
-    cmdFrame.aux2 |= trans_aux2;
+
+    // Ignore aux2 value if NTRANS set 0xFF, for ACTION!
+    if (trans_aux2 == 0xFF)
+    {
+        open_aux2 = cmdFrame.aux2 = 0;
+    }
+    else if (cmdFrame.aux1 == 6) // don't xlate dir listings.
+    {
+        open_aux2 = cmdFrame.aux2;
+    }
+    else
+    {
+        open_aux2 = cmdFrame.aux2;
+        open_aux2 |= trans_aux2;
+        cmdFrame.aux2 |= trans_aux2;
+    }
 
     // Shut down protocol if we are sending another open before we close.
     if (protocol != nullptr)
@@ -478,7 +483,6 @@ bool sioNetwork::sio_status_channel_json(NetworkStatus *ns)
 {
     ns->connected = json_bytes_remaining > 0;
     ns->error = json_bytes_remaining > 0 ? 1 : 136;
-    ns->rxBytesWaiting = json_bytes_remaining;
     return false; // for now
 }
 
@@ -487,7 +491,8 @@ bool sioNetwork::sio_status_channel_json(NetworkStatus *ns)
  */
 void sioNetwork::sio_status_channel()
 {
-    uint8_t serialized_status[4] = {0, 0, 0, 0};
+    NDeviceStatus nstatus;
+    size_t avail = 0;
     bool err = false;
 
 #ifdef VERBOSE_PROTOCOL
@@ -503,26 +508,29 @@ void sioNetwork::sio_status_channel()
             status.error = true;
         } else {
             err = protocol->status(&status);
+            avail = protocol->available();
         }
         break;
     case JSON:
         sio_status_channel_json(&status);
+        avail = json_bytes_remaining;
         break;
     }
     // clear forced flag (first status after open)
     protocol->forceStatus = false;
 
     // Serialize status into status bytes
-    serialized_status[0] = status.rxBytesWaiting & 0xFF;
-    serialized_status[1] = status.rxBytesWaiting >> 8;
-    serialized_status[2] = status.connected;
-    serialized_status[3] = status.error;
+    avail = avail > 65535 ? 65535 : avail;
+    nstatus.avail = htole16(avail);
+    nstatus.conn = status.connected;
+    nstatus.err = status.error;
 
     // leaving this one to print
-    Debug_printf("sio_status_channel() - BW: %u C: %u E: %u\n", status.rxBytesWaiting, status.connected, status.error);
+    Debug_printf("rs232_status_channel() - BW: %u C: %u E: %u\n",
+                 nstatus.avail, nstatus.conn, nstatus.err);
 
     // and send to computer
-    bus_to_computer(serialized_status, sizeof(serialized_status), err);
+    bus_to_computer((uint8_t *) &nstatus, sizeof(nstatus), err);
 }
 
 /**
@@ -566,7 +574,7 @@ void sioNetwork::sio_set_prefix()
     {
         prefix.clear();
     }
-    else 
+    else
     {
         // Append trailing slash if not found
         if (prefixSpec_str.back() != '/')
@@ -681,7 +689,7 @@ void sioNetwork::sio_set_password()
  */
 void sioNetwork::sio_special()
 {
-    do_inquiry(cmdFrame.comnd);
+    do_inquiry((fujiCommandID_t) cmdFrame.comnd);
 
     switch (inq_dstats)
     {
@@ -718,13 +726,13 @@ void sioNetwork::sio_special_inquiry()
     Debug_printf("sioNetwork::sio_special_inquiry(%02x)\n", cmdFrame.aux1);
 #endif
 
-    do_inquiry(cmdFrame.aux1);
+    do_inquiry((fujiCommandID_t) cmdFrame.aux1);
 
     // Finally, return the completed inq_dstats value back to Atari
     bus_to_computer(&inq_dstats, sizeof(inq_dstats), false); // never errors.
 }
 
-void sioNetwork::do_inquiry(unsigned char inq_cmd)
+void sioNetwork::do_inquiry(fujiCommandID_t inq_cmd)
 {
     // Reset inq_dstats
     inq_dstats = 0xff;
@@ -799,20 +807,20 @@ void sioNetwork::sio_special_00()
     // Handle commands that exist outside of an open channel.
     switch (cmdFrame.comnd)
     {
-    case 'P':
+    case FUJICMD_PARSE:
         if (channelMode == JSON)
             sio_parse_json();
         break;
-    case 'T':
+    case FUJICMD_TRANSLATION:
         sio_set_translation();
         break;
-    case 'Z':
+    case FUJICMD_TIMER:
         sio_set_timer_rate();
         break;
-    case 0xFB: // JSON parameter wrangling
+    case FUJICMD_SET_SSID: // JSON parameter wrangling
         sio_set_json_parameters();
         break;
-    case 0xFC: // SET CHANNEL MODE
+    case FUJICMD_GET_SCAN_RESULT: // SET CHANNEL MODE
         sio_set_channel_mode();
         break;
     default:
@@ -960,7 +968,7 @@ void sioNetwork::sio_poll_interrupt()
         protocol->status(&status);
         protocol->fromInterrupt = false;
 
-        if (status.rxBytesWaiting > 0 || status.connected == 0)
+        if (protocol->available() > 0 || status.connected == 0)
             sio_assert_interrupt();
 #ifndef ESP_PLATFORM
         else
@@ -984,7 +992,7 @@ bool sioNetwork::instantiate_protocol()
     {
         protocolParser = new ProtocolParser();
     }
-    
+
     protocol = protocolParser->createProtocol(urlParser->scheme, receiveBuffer, transmitBuffer, specialBuffer, &login, &password);
 
     if (protocol == nullptr)
@@ -1141,7 +1149,7 @@ void sioNetwork::sio_assert_interrupt()
     if (ms - lastInterruptMs >= timerRate)
     {
         interruptProceed = !interruptProceed;
-        fnSioCom.set_proceed(interruptProceed);
+        SYSTEM_BUS.set_proceed(interruptProceed);
         lastInterruptMs = ms;
     }
 #endif
@@ -1153,11 +1161,11 @@ void sioNetwork::sio_assert_interrupt()
  */
 void sioNetwork::sio_clear_interrupt()
 {
-    if (interruptProceed) 
+    if (interruptProceed)
     {
         // Debug_println("clear interrupt");
         interruptProceed = false;
-        fnSioCom.set_proceed(interruptProceed);
+        SYSTEM_BUS.set_proceed(interruptProceed);
         lastInterruptMs = fnSystem.millis();
     }
 }
@@ -1195,14 +1203,17 @@ void sioNetwork::sio_set_json_query()
 
     std::string inp_string;
     if (last_colon_pos != std::string::npos) {
-        Debug_printf("sioNetwork::sio_set_json_query - skipped device spec. Application should be updated to remove it from query (%s)\r\n", in_string.c_str());
+        // Skip the device spec. There was a debug message here,
+        // but it was removed, because there are cases where
+        // removing the devicespec isn't possible, e.g. accessing
+        // via CIO (as an XIO). -thom
         inp_string = in_string.substr(last_colon_pos + 1);
     } else {
         inp_string = in_string;
     }
 
     json->setReadQuery(inp_string, cmdFrame.aux2);
-    json_bytes_remaining = json->json_bytes_remaining;
+    json_bytes_remaining = json->available();
 
     std::vector<uint8_t> tmp(json_bytes_remaining);
     json->readValue(tmp.data(), json_bytes_remaining);

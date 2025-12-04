@@ -7,7 +7,7 @@
 
 #include "../../include/debug.h"
 
-#include "fuji.h"
+#include "fujiDevice.h"
 #include "utils.h"
 
 #define SIO_DISKCMD_FORMAT 0x21
@@ -27,9 +27,6 @@
 
 #define SIO_DISKCMD_PERCOM_READ 0x4E
 #define SIO_DISKCMD_PERCOM_WRITE 0x4F
-
-// External ref to fuji object.
-extern sioFuji theFuji;
 
 sioDisk::sioDisk()
 {
@@ -126,7 +123,7 @@ void sioDisk::sio_status()
 
     uint8_t _status[4];
     _status[0] = 0x00;
-    
+
     if (_disk != nullptr)
     {
         if (_disk->_disk_num_sectors == 1040)
@@ -240,42 +237,25 @@ mediatype_t sioDisk::mount(fnFile *f, const char *filename, uint32_t disksize, m
     case MEDIATYPE_CAS:
     case MEDIATYPE_WAV:
         // open the cassette file
-        theFuji.cassette()->mount_cassette_file(f, disksize);
+        theFuji->cassette()->mount_cassette_file(f, disksize);
         return disk_type;
         // TODO left off here for tape cassette
         break;
-    case MEDIATYPE_XEX:
-        device_active = true;
-        _disk = new MediaTypeXEX();
-        if (host != nullptr)
-        {
-            _disk->_disk_host = host;
-            strcpy(_disk->_disk_filename, filename);
-        }
-        return _disk->mount(f, disksize);
-    case MEDIATYPE_ATX:
-#ifdef ESP_PLATFORM
-        device_active = true;
-        _disk = new MediaTypeATX();
-        if (host != nullptr)
-        {
-            _disk->_disk_host = host;
-            strcpy(_disk->_disk_filename, filename);
-        }
-        return _disk->mount(f, disksize);
-#else
-        Debug_println("ATX is not yet supported");
-#endif
-    case MEDIATYPE_ATR:
-    case MEDIATYPE_UNKNOWN:
     default:
-        device_active = true;
-        _disk = new MediaTypeATR();
-        if (host != nullptr)
+        switch (disk_type)
         {
-            _disk->_disk_host = host;
-            strcpy(_disk->_disk_filename, filename);
+        case MEDIATYPE_XEX:
+            _disk = new MediaTypeXEX();
+            break;
+        case MEDIATYPE_ATX:
+            _disk = new MediaTypeATX();
+            break;
+        default:
+            _disk = new MediaTypeATR();
+            break;
         }
+        device_active = true;
+        strcpy(_disk->_disk_filename, filename);
         return _disk->mount(f, disksize);
     }
 }
@@ -323,11 +303,11 @@ void sioDisk::sio_process(uint32_t commanddata, uint8_t checksum)
     if (_disk == nullptr || _disk->_disktype == MEDIATYPE_UNKNOWN)
         return;
 
-    if ((device_active == false && cmdFrame.device != SIO_DEVICEID_DISK) || // not active and not D1
-        (device_active == false && theFuji.boot_config == false)) // not active and not config boot
+    if ((device_active == false && cmdFrame.device != FUJI_DEVICEID_DISK) || // not active and not D1
+        (device_active == false && theFuji->boot_config == false)) // not active and not config boot
         return;
 
-    Debug_printf("disk sio_process(), baud: %d\n", SIO.getBaudrate());
+    Debug_printf("disk sio_process(), baud: %d\n", SYSTEM_BUS.getBaudrate());
 
     switch (cmdFrame.comnd)
     {
@@ -397,9 +377,9 @@ void sioDisk::sio_process(uint32_t commanddata, uint8_t checksum)
     case SIO_DISKCMD_HSIO_STATUS:
         if (is_config_device == true)
         {
-            if (theFuji.boot_config == true)
+            if (theFuji->boot_config == true)
             {
-                if (status_wait_count > 0 && theFuji.status_wait_enabled)
+                if (status_wait_count > 0 && theFuji->status_wait_enabled)
                 {
                     Debug_print("ignoring status command\n");
                     status_wait_count--;
@@ -485,7 +465,7 @@ void sioDisk::sio_process(uint32_t commanddata, uint8_t checksum)
         {
             sio_ack();
             sio_high_speed();
-            SIO.toggleBaudrate();
+            SYSTEM_BUS.toggleBaudrate();
             return;
         }
         break;

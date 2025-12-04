@@ -18,8 +18,8 @@ def build_argparser():
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument("--use_modified_date", action="store_true",
                       help="use date of newest modified file instead of commit date")
-  parser.add_argument("--update_version_h", action="store_true",
-                      help="update include/version.h with current commit information")
+  parser.add_argument("--set_version",
+                      help="update include/version.h and create annotated tag")
   return parser
 
 def run_command(cmd):
@@ -57,6 +57,27 @@ def load_version_macros(path):
       macros[name] = value
   return macros
 
+def update_version_macros(path, macros):
+  txt = [line.rstrip() for line in open(path)]
+  saw_minor = saw_patch = False
+  for line in txt:
+    m = re.match(MACRO_PATTERN, line)
+    if m:
+      name = m.group(1)
+      if name not in macros:
+        continue
+      line = f"#define {name} {macros[name]}"
+      if name == "FN_VERSION_MINOR":
+        saw_minor = True
+      if name == "FN_VERSION_PATCH":
+        saw_patch = True
+    elif not line.strip() and saw_minor and not saw_patch:
+      name = "FN_VERSION_PATCH"
+      line = f"#define {name} {macros[name]}\n" + line
+      saw_patch = True
+    print(line)
+  return
+
 def main():
   base = get_repo_base()
   if not is_fujinet_repo(base):
@@ -64,7 +85,6 @@ def main():
     return 0
 
   args = build_argparser().parse_args()
-  # FIXME - don't allow update_version_h unless on the actual tag?
 
   version_h_path = os.path.join(base, VERSION_H)
   version = get_commit_version()
@@ -85,18 +105,42 @@ def main():
   cur_macros = load_version_macros(version_h_path)
   ver_major = int(cur_macros['FN_VERSION_MAJOR'])
   ver_minor = int(cur_macros['FN_VERSION_MINOR'])
+  ver_patch = int(cur_macros.get('FN_VERSION_PATCH', 0))
 
-  m = re.match(r"^v([0-9]+)[.]([0-9]+)[.]([0-9]+)-([0-9]+)-g(.*)", version)
-  if m:
-    ver_major = macros['FN_VERSION_MAJOR'] = int(m.group(1))
-    ver_minor = macros['FN_VERSION_MINOR'] = int(m.group(2))
-    version = f"v{m.group(1)}.{m.group(2)}-{m.group(5)}"
+  if args.set_version:
+    version = args.set_version
+    m = re.match(r"^v([0-9]+)[.]([0-9]+)([.]([0-9]+))?(-rc([0-9]+))?", version)
+    if not m:
+      print("Unable to parse version:", version)
+      exit(1)
+    ver_major = int(m.group(1))
+    ver_minor = int(m.group(2))
+    ver_patch = 0
+    cur_macros['FN_VERSION_MAJOR'] = ver_major
+    cur_macros['FN_VERSION_MINOR'] = ver_minor
+    cur_macros['FN_VERSION_PATCH'] = ver_patch
+    if m.group(4):
+      ver_patch = int(m.group(4))
+      cur_macros['FN_VERSION_PATCH'] = ver_patch
+    if m.group(6):
+      ver_rc = int(m.group(6))
+      cur_macros['FN_VERSION_RC'] = ver_rc
+    cur_macros['FN_VERSION_DATE'] = modified
+    version = f"v{ver_major}.{ver_minor}.{ver_patch}"
+
   else:
-    m = re.match(r"^([a-z0-9]{8})$", version)
+    m = re.match(r"^v([0-9]+)[.]([0-9]+)[.]([0-9]+)-([0-9]+)-g(.*)", version)
     if m:
-      version = f"v{ver_major}.{ver_minor}-{version}"
+      ver_major = macros['FN_VERSION_MAJOR'] = int(m.group(1))
+      ver_minor = macros['FN_VERSION_MINOR'] = int(m.group(2))
+      ver_minor = macros['FN_VERSION_PATCH'] = int(m.group(3))
+      version = f"v{m.group(1)}.{m.group(2)}-{m.group(5)}"
+    else:
+      m = re.match(r"^([a-z0-9]{8})$", version)
+      if m:
+        version = f"v{ver_major}.{ver_minor}-{version}"
 
-  if modified:
+  if modified and not args.set_version:
     version += "*"
   macros['FN_VERSION_FULL'] = version
   macros['FN_VERSION_DATE'] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
@@ -118,10 +162,12 @@ def main():
         mdef += f"={value}"
       macro_defs.append(shlex.quote(mdef))
 
-    # FIXME - if args.update_version_h then update, don't print
-    macro_defs = " ".join(macro_defs)
-    print(macro_defs)
-    #Path(version_h_path).touch()
+    if args.set_version:
+      update_version_macros(version_h_path, cur_macros)
+    else:
+      macro_defs = " ".join(macro_defs)
+      print(macro_defs)
+      #Path(version_h_path).touch()
 
   return
 

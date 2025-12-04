@@ -26,7 +26,19 @@
 #include "fsFlash.h"
 #include "fnFsSD.h"
 
+#include "fnLedStrip.h"
+
 #include "httpService.h"
+
+#ifdef ENABLE_CONSOLE
+#include "../lib/console/ESP32Console.h"
+using namespace ESP32Console;
+Console console;
+#endif
+
+#ifdef ENABLE_DISPLAY
+#include "display.h"
+#endif
 
 #ifndef ESP_PLATFORM
 #include "fnTaskManager.h"
@@ -44,8 +56,7 @@
 // fnKeyManager is declared and defined in keys.h/cpp
 // fnHTTPD is declared and defineid in HttpService.h/cpp
 
-// sioFuji theFuji; // moved to fuji.h/.cpp
-
+systemBus SYSTEM_BUS; // Global SYSTEM_BUS object
 
 #ifndef ESP_PLATFORM
 
@@ -127,11 +138,22 @@ void main_setup(int argc, char *argv[])
 
     // Startup messages
 #ifdef ESP_PLATFORM
-  #ifdef DEBUG
-    fnUartDebug.begin(DEBUG_SPEED);
+
     unsigned long startms = fnSystem.millis();
+
+#ifdef ENABLE_CONSOLE
+    //You can change the console prompt before calling begin(). By default it is "ESP32>"
+    console.setPrompt("fujinet[%pwd%]# ");
+
+    //You can change the baud rate and pin numbers similar to Serial.begin() here.
+    console.begin(DEBUG_SPEED);
+#else
+    Serial.begin(ChannelConfig().baud(DEBUG_SPEED).deviceID(FN_UART_DEBUG));
+#endif
+
+#ifdef DEBUG
     Debug_printf("\r\n\r\n--~--~--~--\nFujiNet %s Started @ %lu\r\n", fnSystem.get_fujinet_version(), startms);
-    Debug_printf("Starting heap: %u\r\n", fnSystem.get_free_heap_size());
+    Debug_printf("Starting heap: %lu\r\n", fnSystem.get_free_heap_size());
     Debug_printv("Heap: %lu\r\n",esp_get_free_internal_heap_size());
     #ifdef ATARI
     Debug_printf("PsramSize %u\r\n", fnSystem.get_psram_size());
@@ -180,7 +202,7 @@ void main_setup(int argc, char *argv[])
     // Initialize Winsock
     WSADATA wsaData;
     int result = WSAStartup(MAKEWORD(2,2), &wsaData);
-    if (result != 0) 
+    if (result != 0)
     {
         Debug_printf("WSAStartup failed: %d\n", result);
         exit(EXIT_FAILURE);
@@ -193,6 +215,7 @@ void main_setup(int argc, char *argv[])
 
 #ifdef ESP_PLATFORM
     fnKeyManager.setup();
+    fnLedStrip.setup();
 #endif
     fnLedManager.setup();
 
@@ -212,14 +235,14 @@ void main_setup(int argc, char *argv[])
     // WiFi/BT auto connect moved to app_main()
 
 #ifdef BUILD_ATARI
-    theFuji.setup(&SIO);
-    SIO.addDevice(&theFuji, SIO_DEVICEID_FUJINET); // the FUJINET!
+    theFuji->setup();
+    SYSTEM_BUS.addDevice(theFuji, FUJI_DEVICEID_FUJINET); // the FUJINET!
 
     if (Config.get_apetime_enabled() == true)
-        SIO.addDevice(&clockDevice, SIO_DEVICEID_APETIME); // Clock for Atari, APETime compatible, but extended for additional return types
+        SYSTEM_BUS.addDevice(&clockDevice, FUJI_DEVICEID_CLOCK); // Clock for Atari, APETime compatible, but extended for additional return types
 
 #ifdef ESP_PLATFORM
-    SIO.addDevice(&udpDev, SIO_DEVICEID_MIDI); // UDP/MIDI device
+    SYSTEM_BUS.addDevice(&udpDev, FUJI_DEVICEID_MIDI); // UDP/MIDI device
 #endif
 
     // add PCLink device only if we have SD card
@@ -231,7 +254,7 @@ void main_setup(int argc, char *argv[])
 #else
         pcLink.mount(1, Config.get_general_SD_path().c_str()); // mount SD as PCL1:
 #endif
-        SIO.addDevice(&pcLink, SIO_DEVICEID_PCLINK); // PCLink
+        SYSTEM_BUS.addDevice(&pcLink, FUJI_DEVICEID_PCLINK); // PCLink
     }
 
     // Create a new printer object, setting its output depending on whether we have SD or not
@@ -245,29 +268,23 @@ void main_setup(int argc, char *argv[])
     sioPrinter *ptr = new sioPrinter(ptrfs, ptype);
     fnPrinters.set_entry(0, ptr, ptype, Config.get_printer_port(0));
 
-    SIO.addDevice(ptr, SIO_DEVICEID_PRINTER + fnPrinters.get_port(0)); // P:
+    SYSTEM_BUS.addDevice(ptr, (fujiDeviceID_t) (FUJI_DEVICEID_PRINTER
+                                                + fnPrinters.get_port(0))); // P:
 
     sioR = new modem(ptrfs, Config.get_modem_sniffer_enabled()); // Config/User selected sniffer enable
-#ifdef ESP_PLATFORM
-    SYSTEM_BUS.set_uart(&fnUartBUS);
-#else
-    SYSTEM_BUS.set_uart(&fnSioCom);
-#endif
 
-    SIO.addDevice(sioR, SIO_DEVICEID_RS232); // R:
+    SYSTEM_BUS.addDevice(sioR, FUJI_DEVICEID_SERIAL); // R:
 
-#ifdef ESP_PLATFORM
-    SIO.addDevice(&sioV, SIO_DEVICEID_FN_VOICE); // P3:
-#endif
+    SYSTEM_BUS.addDevice(&sioV, FUJI_DEVICEID_VOICE); // P3:
 
-    SIO.addDevice(&sioZ, SIO_DEVICEID_CPM); // (ATR8000 CPM)
+    SYSTEM_BUS.addDevice(&sioZ, FUJI_DEVICEID_CPM); // (ATR8000 CPM)
 
     // Go setup SIO
-    SIO.setup();
+    SYSTEM_BUS.setup();
 #endif // BUILD_ATARI
 
 #ifdef BUILD_COCO
-    theFuji.setup(&DRIVEWIRE);
+    theFuji->setup();
 
     FileSystem *ptrfs = fnSDFAT.running() ? (FileSystem *)&fnSDFAT : (FileSystem *)&fsFlash;
     drivewirePrinter::printer_type ptype = Config.get_printer_type(0);
@@ -278,38 +295,50 @@ void main_setup(int argc, char *argv[])
 
     drivewirePrinter *ptr = new drivewirePrinter(ptrfs, ptype);
     fnPrinters.set_entry(0, ptr, ptype, Config.get_printer_port(0));
-    DRIVEWIRE.setPrinter(ptr);
+    SYSTEM_BUS.setPrinter(ptr);
 
-    DRIVEWIRE.setup();
+    SYSTEM_BUS.setup();
 #endif
 
 #ifdef BUILD_IEC
 
     // Setup IEC Bus
-    IEC.setup();
+    SYSTEM_BUS.setup();
 
-    theFuji.setup(&IEC);
+    theFuji->setup();
     //sioR = new iecModem(ptrfs, Config.get_modem_sniffer_enabled());
 
 #endif // BUILD_IEC
 
 #ifdef BUILD_LYNX
-    theFuji.setup(&ComLynx);
-    ComLynx.setup();
+    theFuji->setup();
+    SYSTEM_BUS.setup();
 #endif
 
 #ifdef BUILD_RS232
-    theFuji.setup(&RS232);
-    RS232.setup();
-    RS232.addDevice(&theFuji,0x70);
+    theFuji->setup();
+    SYSTEM_BUS.setup();
+    SYSTEM_BUS.addDevice(theFuji, FUJI_DEVICEID_FUJINET);
     if (Config.get_apetime_enabled() == true)
-        RS232.addDevice(&apeTime, RS232_DEVICEID_APETIME); // Clock for Atari, APETime compatible, but extended for additional return types
+        SYSTEM_BUS.addDevice(&apeTime, FUJI_DEVICEID_CLOCK); // Clock for Atari, APETime compatible, but extended for additional return types
 
+    // Create a new printer object, setting its output depending on whether we have SD or not
+    FileSystem *ptrfs = fnSDFAT.running() ? (FileSystem *)&fnSDFAT : (FileSystem *)&fsFlash;
+    rs232Printer::printer_type ptype = Config.get_printer_type(0);
+    if (ptype == rs232Printer::printer_type::PRINTER_INVALID)
+        ptype = rs232Printer::printer_type::PRINTER_FILE_TRIM;
+
+    Debug_printf("Creating a default printer using %s storage and type %d\r\n", ptrfs->typestring(), ptype);
+
+    rs232Printer *ptr = new rs232Printer(ptrfs, ptype);
+    fnPrinters.set_entry(0, ptr, ptype, 0);
+
+    SYSTEM_BUS.addDevice(ptr, FUJI_DEVICEID_PRINTER); // P:
 #endif
 
 #ifdef BUILD_RC2014
-    theFuji.setup(&rc2014Bus);
-    rc2014Bus.setup();
+    theFuji->setup();
+    SYSTEM_BUS.setup();
 
     FileSystem *ptrfs = fnSDFAT.running() ? (FileSystem *)&fnSDFAT : (FileSystem *)&fsFlash;
     rc2014Printer::printer_type ptype = Config.get_printer_type(0);
@@ -321,16 +350,16 @@ void main_setup(int argc, char *argv[])
     rc2014Printer *ptr = new rc2014Printer(ptrfs, ptype);
     fnPrinters.set_entry(0, ptr, ptype, Config.get_printer_port(0));
 
-    rc2014Bus.addDevice(ptr, RC2014_DEVICEID_PRINTER + fnPrinters.get_port(0)); // P:
+    SYSTEM_BUS.addDevice(ptr, RC2014_DEVICEID_PRINTER + fnPrinters.get_port(0)); // P:
 
     sioR = new rc2014Modem(ptrfs, Config.get_modem_sniffer_enabled()); // Config/User selected sniffer enable
-    rc2014Bus.addDevice(sioR, RC2014_DEVICEID_MODEM); // R:
+    SYSTEM_BUS.addDevice(sioR, RC2014_DEVICEID_MODEM); // R:
 
 #endif
 
 #ifdef BUILD_H89
-    theFuji.setup(&H89Bus);
-    H89Bus.setup();
+    theFuji->setup();
+    SYSTEM_BUS.setup();
 
     FileSystem *ptrfs = fnSDFAT.running() ? (FileSystem *)&fnSDFAT : (FileSystem *)&fsFlash;
     H89Printer::printer_type ptype = Config.get_printer_type(0);
@@ -342,16 +371,16 @@ void main_setup(int argc, char *argv[])
     H89Printer *ptr = new H89Printer(ptrfs, ptype);
     fnPrinters.set_entry(0, ptr, ptype, Config.get_printer_port(0));
 
-    // H89Bus.addDevice(ptr, H89_DEVICEID_PRINTER + fnPrinters.get_port(0)); // P:
+    // SYSTEM_BUS.addDevice(ptr, H89_DEVICEID_PRINTER + fnPrinters.get_port(0)); // P:
 
     // H89R = new H89Modem(ptrfs, Config.get_modem_sniffer_enabled()); // Config/User selected sniffer enable
-    // H89Bus.addDevice(H89R, H89_DEVICEID_MODEM); // R:
+    // SYSTEM_BUS.addDevice(H89R, H89_DEVICEID_MODEM); // R:
 
 #endif
 
 #ifdef BUILD_ADAM
-    theFuji.setup(&AdamNet);
-    AdamNet.setup();
+    theFuji->setup();
+    SYSTEM_BUS.setup();
     fnSDFAT.create_path("/FujiNet");
 
     Debug_printf("Adding virtual printer\r\n");
@@ -359,12 +388,12 @@ void main_setup(int argc, char *argv[])
     adamPrinter::printer_type printer = Config.get_printer_type(0);
     adamPrinter *ptr = new adamPrinter(ptrfs, printer);
     fnPrinters.set_entry(0, ptr, printer, 0);
-    AdamNet.addDevice(ptr, ADAMNET_DEVICE_ID_PRINTER);
+    SYSTEM_BUS.addDevice(ptr, ADAMNET_DEVICE_ID_PRINTER);
 
     if (Config.get_printer_enabled())
-        AdamNet.enableDevice(ADAMNET_DEVICE_ID_PRINTER);
+        SYSTEM_BUS.enableDevice(ADAMNET_DEVICE_ID_PRINTER);
     else
-        AdamNet.disableDevice(ADAMNET_DEVICE_ID_PRINTER);
+        SYSTEM_BUS.disableDevice(ADAMNET_DEVICE_ID_PRINTER);
 
 #ifdef VIRTUAL_ADAM_DEVICES
     Debug_printf("Physical Device Scanning...\r\n");
@@ -376,7 +405,7 @@ void main_setup(int argc, char *argv[])
     {
         Debug_printf("Adding virtual keyboard\r\n");
         sioK = new adamKeyboard();
-        AdamNet.addDevice(sioK, ADAMNET_DEVICE_ID_KEYBOARD);
+        SYSTEM_BUS.addDevice(sioK, ADAMNET_DEVICE_ID_KEYBOARD);
     }
     else
         Debug_printf("Physical keyboard found\r\n");
@@ -391,14 +420,14 @@ void main_setup(int argc, char *argv[])
     iwmModem *sioR;
     FileSystem *ptrfs = fnSDFAT.running() ? (FileSystem *)&fnSDFAT : (FileSystem *)&fsFlash;
     sioR = new iwmModem(ptrfs, Config.get_modem_sniffer_enabled());
-    IWM.addDevice(sioR,iwm_fujinet_type_t::Modem);
+    SYSTEM_BUS.addDevice(sioR,iwm_fujinet_type_t::Modem);
     iwmPrinter::printer_type ptype = Config.get_printer_type(0);
     iwmPrinter *ptr = new iwmPrinter(ptrfs, ptype);
     fnPrinters.set_entry(0, ptr, ptype, Config.get_printer_port(0));
-    IWM.addDevice(ptr, iwm_fujinet_type_t::Printer);
+    SYSTEM_BUS.addDevice(ptr, iwm_fujinet_type_t::Printer);
 
-    theFuji.setup(&IWM);
-    IWM.setup(); // save device unit SP address somewhere and restore it after reboot?
+    theFuji->setup();
+    SYSTEM_BUS.setup(); // save device unit SP address somewhere and restore it after reboot?
 
 #endif /* BUILD_APPLE */
 
@@ -406,14 +435,14 @@ void main_setup(int argc, char *argv[])
     FileSystem *ptrfs = fnSDFAT.running() ? (FileSystem *)&fnSDFAT : (FileSystem *)&fsFlash;
 
     sioR = new macModem(ptrfs, Config.get_modem_sniffer_enabled());
-    MAC.setup();
-    theFuji.setup(&MAC);
+    SYSTEM_BUS.setup();
+    theFuji->setup();
 
 #endif // BUILD_MAC
 
 #ifdef BUILD_CX16
-    theFuji.setup(&CX16);
-    CX16.addDevice(&theFuji, CX16_DEVICEID_FUJINET); // the FUJINET!
+    theFuji->setup();
+    SYSTEM_BUS.addDevice(theFuji, CX16_DEVICEID_FUJINET); // the FUJINET!
 
     // Create a new printer object, setting its output depending on whether we have SD or not
     FileSystem *ptrfs = fnSDFAT.running() ? (FileSystem *)&fnSDFAT : (FileSystem *)&fsFlash;
@@ -426,18 +455,40 @@ void main_setup(int argc, char *argv[])
     cx16Printer *ptr = new cx16Printer(ptrfs, ptype);
     fnPrinters.set_entry(0, ptr, ptype, Config.get_printer_port(0));
 
-    CX16.addDevice(ptr, CX16_DEVICEID_PRINTER + fnPrinters.get_port(0)); // P:
+    SYSTEM_BUS.addDevice(ptr, CX16_DEVICEID_PRINTER + fnPrinters.get_port(0)); // P:
 
     // Go setup SIO
-    CX16.setup();
+    SYSTEM_BUS.setup();
 #endif
 
 #ifdef ESP_PLATFORM
   #ifdef DEBUG
     unsigned long endms = fnSystem.millis();
-    Debug_printf("\r\nAvailable heap: %u\r\nSetup complete @ %lu (%lums)\r\n", fnSystem.get_free_heap_size(), endms, endms - startms);
+    Debug_printf("\r\nAvailable heap: %lu\r\nSetup complete @ %lu (%lums)\r\n", fnSystem.get_free_heap_size(), endms, endms - startms);
     Debug_printv("Low Heap: %lu",esp_get_free_internal_heap_size());
   #endif // DEBUG
+
+#ifdef ENABLE_DISPLAY
+    DISPLAY.start();
+#endif
+
+#ifdef ENABLE_CONSOLE
+    //Register builtin commands like 'reboot', 'version', or 'meminfo'
+    console.registerSystemCommands();
+
+    //Register network commands
+    console.registerNetworkCommands();
+
+    //Register the VFS specific commands
+    console.registerVFSCommands();
+
+    //Register GPIO commands
+    console.registerGPIOCommands();
+
+    //Register XFER commands
+    console.registerXFERCommands();
+#endif
+
 #else
 // !ESP_PLATFORM
     unsigned long endms = fnSystem.millis();
@@ -447,7 +498,7 @@ void main_setup(int argc, char *argv[])
 
 #ifdef BUILD_S100
 
-// theFuji.setup(&s100Bus);
+// theFuji->setup();
 // SYSTEM_BUS.setup();
 
 #endif /* BUILD_S100*/

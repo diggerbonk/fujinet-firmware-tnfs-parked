@@ -5,9 +5,12 @@
  */
 
 #include "network.h"
+#include "../network.h"
+#include "fujiCommandID.h"
 
 #include <cstring>
 #include <algorithm>
+#include "fuji_endian.h"
 
 #include "../../include/debug.h"
 #include "../../include/pinmap.h"
@@ -30,6 +33,7 @@
 
 using namespace std;
 
+#ifdef ESP_PLATFORM
 /**
  * Static callback function for the interrupt rate limiting timer. It sets the interruptProceed
  * flag to true. This is set to false when the interrupt is serviced.
@@ -41,6 +45,7 @@ void onTimer(void *info)
     parent->interruptProceed = !parent->interruptProceed;
     portEXIT_CRITICAL_ISR(&parent->timerMux);
 }
+#endif /* ESP_PLATFORM */
 
 /**
  * Constructor
@@ -55,7 +60,7 @@ rs232Network::rs232Network()
     transmitBuffer->clear();
     specialBuffer->clear();
 
-    json.setLineEnding("\x9B"); // use ATASCII EOL for JSON records
+    json.setLineEnding("\r\n"); // use ATASCII EOL for JSON records
 }
 
 /**
@@ -95,8 +100,10 @@ void rs232Network::rs232_open()
 
     channelMode = PROTOCOL;
 
+#ifdef ESP_PLATFORM
     // Delete timer if already extant.
     timer_stop();
+#endif /* ESP_PLATFORM */
 
     // persist aux1/aux2 values
     open_aux1 = cmdFrame.aux1;
@@ -146,14 +153,18 @@ void rs232Network::rs232_open()
         return;
     }
 
+#ifdef ESP_PLATFORM
     // Everything good, start the interrupt timer!
     timer_start();
+#endif
 
     // Go ahead and send an interrupt, so Atari knows to get status.
     rs232_assert_interrupt();
 
     // TODO: Finally, go ahead and let the parsers know
     json.setProtocol(protocol);
+    json.setLineEnding("\r\n");
+    protocol->setLineEnding("\r\n");
     channelMode = PROTOCOL;
 
     // And signal complete!
@@ -204,7 +215,7 @@ void rs232Network::rs232_close()
  */
 void rs232Network::rs232_read()
 {
-    unsigned short num_bytes = rs232_get_aux();
+    unsigned short num_bytes = rs232_get_aux16_lo();
     bool err = false;
 
     Debug_printf("rs232Network::rs232_read( %d bytes)\n", num_bytes);
@@ -277,7 +288,7 @@ bool rs232Network::rs232_read_channel(unsigned short num_bytes)
  */
 void rs232Network::rs232_write()
 {
-    unsigned short num_bytes = rs232_get_aux();
+    unsigned short num_bytes = rs232_get_aux16_lo();
     uint8_t *newData;
     bool err = false;
 
@@ -384,7 +395,7 @@ void rs232Network::rs232_status_local()
         Debug_printf("Netmask: %u.%u.%u.%u\n", ipNetmask[0], ipNetmask[1], ipNetmask[2], ipNetmask[3]);
         bus_to_computer(ipNetmask, 4, false);
         break;
-    case 3: // Gatway
+    case 3: // Gateway
         Debug_printf("Gateway: %u.%u.%u.%u\n", ipGateway[0], ipGateway[1], ipGateway[2], ipGateway[3]);
         bus_to_computer(ipGateway, 4, false);
         break;
@@ -403,7 +414,6 @@ bool rs232Network::rs232_status_channel_json(NetworkStatus *ns)
 {
     ns->connected = json_bytes_remaining > 0;
     ns->error = json_bytes_remaining > 0 ? 1 : 136;
-    ns->rxBytesWaiting = json_bytes_remaining;
     return false; // for now
 }
 
@@ -412,7 +422,8 @@ bool rs232Network::rs232_status_channel_json(NetworkStatus *ns)
  */
 void rs232Network::rs232_status_channel()
 {
-    uint8_t serialized_status[4] = {0, 0, 0, 0};
+    NDeviceStatus nstatus;
+    size_t avail = 0;
     bool err = false;
 
     Debug_printf("rs232Network::rs232_status_channel(%u)\n", channelMode);
@@ -426,24 +437,26 @@ void rs232Network::rs232_status_channel()
             status.error = true;
         } else {
             err = protocol->status(&status);
+            avail = protocol->available();
         }
         break;
     case JSON:
         rs232_status_channel_json(&status);
+        avail = json_bytes_remaining;
         break;
     }
 
     // Serialize status into status bytes
-    serialized_status[0] = status.rxBytesWaiting & 0xFF;
-    serialized_status[1] = status.rxBytesWaiting >> 8;
-    serialized_status[2] = status.connected;
-    serialized_status[3] = status.error;
+    avail = avail > 65535 ? 65535 : avail;
+    nstatus.avail = htole16(avail);
+    nstatus.conn = status.connected;
+    nstatus.err = status.error;
 
     Debug_printf("rs232_status_channel() - BW: %u C: %u E: %u\n",
-                 status.rxBytesWaiting, status.connected, status.error);
+                 nstatus.avail, nstatus.conn, nstatus.err);
 
     // and send to computer
-    bus_to_computer(serialized_status, sizeof(serialized_status), err);
+    bus_to_computer((uint8_t *) &nstatus, sizeof(nstatus), err);
 }
 
 /**
@@ -472,51 +485,73 @@ void rs232Network::rs232_set_prefix()
 
     memset(prefixSpec, 0, sizeof(prefixSpec));
 
-    bus_to_peripheral(prefixSpec, sizeof(prefixSpec));
+    bus_to_peripheral(prefixSpec, sizeof(prefixSpec)); // TODO test checksum
     util_devicespec_fix_9b(prefixSpec, sizeof(prefixSpec));
 
     prefixSpec_str = string((const char *)prefixSpec);
     prefixSpec_str = prefixSpec_str.substr(prefixSpec_str.find_first_of(":") + 1);
-    Debug_printf("rs232Network::rs232_set_prefix(%s)\n", prefixSpec_str.c_str());
 
+#ifdef VERBOSE_PROTOCOL
+    Debug_printf("sioNetwork::sio_set_prefix(%s)\n", prefixSpec_str.c_str());
+#endif
+
+    // If "NCD Nn:" then prefix is cleared completely
     if (prefixSpec_str.empty())
     {
         prefix.clear();
     }
-    else if (prefixSpec_str == "..") // Devance path N:..
+    else
     {
-        std::vector<int> pathLocations;
-        for (int i = 0; i < prefix.size(); i++)
+        // Append trailing slash if not found
+        if (prefixSpec_str.back() != '/')
         {
-            if (prefix[i] == '/')
-            {
-                pathLocations.push_back(i);
-            }
+            prefixSpec_str += "/";
         }
 
-        if (prefix[prefix.size() - 1] == '/')
+        // For the remaining cases, append trailing slash if not found
+        if (prefix.back() != '/')
         {
-            // Get rid of last path segment.
-            pathLocations.pop_back();
+            prefix += "/";
         }
 
-        // truncate to that location.
-        prefix = prefix.substr(0, pathLocations.back() + 1);
-    }
-    else if (prefixSpec_str[0] == '/') // N:/DIR
-    {
-        prefix = prefixSpec_str;
-    }
-    else if (prefixSpec_str.find_first_of(":") != string::npos)
-    {
-        prefix = prefixSpec_str;
-    }
-    else // append to path.
-    {
-        prefix += prefixSpec_str;
+        // Find pos of 3rd "/" in prefix
+        size_t pos = prefix.find("/");
+        pos = prefix.find("/",++pos);
+        pos = prefix.find("/",++pos);
+
+        // If "NCD Nn:.."" or "NCD .." then devance prefix
+        if (prefixSpec_str == ".." || prefixSpec_str == "<")
+        {
+            prefix += ".."; // call to canonical path later will resolve
+        }
+        // If "NCD Nn:/" or "NCD /" then truncate to hostname (e.g. TNFS://hostname/)
+        else if (prefixSpec_str == "/" || prefixSpec_str == ">")
+        {
+            // truncate at pos of 3rd slash
+            prefix = prefix.substr(0,pos+1);
+        }
+        // If "NCD Nn:/path/to/dir/" then concatenate hostname and prefix
+        else if (prefixSpec_str[0] == '/') // N:/DIR
+        {
+            // append at pos of 3rd slash
+            prefix = prefix.substr(0,pos);
+            prefix += prefixSpec_str;
+        }
+        // If "NCD TNFS://foo.com/" then reset entire prefix
+        else if (prefixSpec_str.find_first_of(":") != string::npos)
+        {
+            prefix = prefixSpec_str;
+        }
+        else // append to path.
+        {
+            prefix += prefixSpec_str;
+        }
     }
 
+    prefix = util_get_canonical_path(prefix);
+#ifdef VERBOSE_PROTOCOL
     Debug_printf("Prefix now: %s\n", prefix.c_str());
+#endif
 
     // We are okay, signal complete.
     rs232_complete();
@@ -580,19 +615,19 @@ void rs232Network::rs232_set_password()
  */
 void rs232Network::rs232_special()
 {
-    do_inquiry(cmdFrame.comnd);
+    do_inquiry((fujiCommandID_t) cmdFrame.comnd);
 
     switch (inq_dstats)
     {
-    case 0x00: // No payload
+    case DIRECTION_NONE:  // No payload
         rs232_ack();
         rs232_special_00();
         break;
-    case 0x40: // Payload to Atari
+    case DIRECTION_READ:  // Payload to Atari
         rs232_ack();
         rs232_special_40();
         break;
-    case 0x80: // Payload to Peripheral
+    case DIRECTION_WRITE: // Payload to Peripheral
         rs232_ack();
         rs232_special_80();
         break;
@@ -615,59 +650,59 @@ void rs232Network::rs232_special_inquiry()
 
     Debug_printf("rs232Network::rs232_special_inquiry(%02x)\n", cmdFrame.aux1);
 
-    do_inquiry(cmdFrame.aux1);
+    do_inquiry((fujiCommandID_t) cmdFrame.aux1);
 
     // Finally, return the completed inq_dstats value back to Atari
-    bus_to_computer(&inq_dstats, sizeof(inq_dstats), false); // never errors.
+    bus_to_computer((uint8_t *) &inq_dstats, sizeof(inq_dstats), false); // never errors.
 }
 
-void rs232Network::do_inquiry(unsigned char inq_cmd)
+void rs232Network::do_inquiry(fujiCommandID_t inq_cmd)
 {
     // Reset inq_dstats
-    inq_dstats = 0xff;
+    inq_dstats = SIO_DIRECTION_INVALID;
 
     // Ask protocol for dstats, otherwise get it locally.
     if (protocol != nullptr)
         inq_dstats = protocol->special_inquiry(inq_cmd);
 
     // If we didn't get one from protocol, or unsupported, see if supported globally.
-    if (inq_dstats == 0xFF)
+    if (inq_dstats == SIO_DIRECTION_INVALID)
     {
         switch (inq_cmd)
         {
-        case 0x20:
-        case 0x21:
-        case 0x23:
-        case 0x24:
-        case 0x2A:
-        case 0x2B:
-        case 0x2C:
-        case 0xFD:
-        case 0xFE:
-            inq_dstats = 0x80;
+        case FUJICMD_RENAME:
+        case FUJICMD_DELETE:
+        case FUJICMD_LOCK:
+        case FUJICMD_UNLOCK:
+        case FUJICMD_MKDIR:
+        case FUJICMD_RMDIR:
+        case FUJICMD_CHDIR:
+        case FUJICMD_USERNAME:
+        case FUJICMD_PASSWORD:
+            inq_dstats = SIO_DIRECTION_WRITE;
             break;
-        case 0xFC:
-            inq_dstats = 0x00;
+        case FUJICMD_JSON:
+            inq_dstats = SIO_DIRECTION_NONE;
             break;
-        case 0x30:
-            inq_dstats = 0x40;
+        case FUJICMD_GETCWD:
+            inq_dstats = SIO_DIRECTION_READ;
             break;
-        case 'Z': // Set interrupt rate
-            inq_dstats = 0x00;
+        case FUJICMD_TIMER: // Set interrupt rate
+            inq_dstats = SIO_DIRECTION_NONE;
             break;
-        case 'T': // Set Translation
-            inq_dstats = 0x00;
+        case FUJICMD_TRANSLATION: // Set Translation
+            inq_dstats = SIO_DIRECTION_NONE;
             break;
-        case 'P': // JSON Parse
+        case FUJICMD_PARSE: // JSON Parse
             if (channelMode == JSON)
-                inq_dstats = 0x00;
+                inq_dstats = SIO_DIRECTION_NONE;
             break;
-        case 'Q': // JSON Query
+        case FUJICMD_QUERY: // JSON Query
             if (channelMode == JSON)
-                inq_dstats = 0x80;
+                inq_dstats = SIO_DIRECTION_WRITE;
             break;
         default:
-            inq_dstats = 0xFF; // not supported
+            inq_dstats = SIO_DIRECTION_INVALID; // not supported
             break;
         }
     }
@@ -685,17 +720,17 @@ void rs232Network::rs232_special_00()
     // Handle commands that exist outside of an open channel.
     switch (cmdFrame.comnd)
     {
-    case 'P':
+    case FUJICMD_PARSE:
         if (channelMode == JSON)
             rs232_parse_json();
         break;
-    case 'T':
+    case FUJICMD_TRANSLATION:
         rs232_set_translation();
         break;
-    case 'Z':
+    case FUJICMD_TIMER:
         rs232_set_timer_rate();
         break;
-    case 0xFC: // SET CHANNEL MODE
+    case FUJICMD_JSON: // SET CHANNEL MODE
         rs232_set_channel_mode();
         break;
     default:
@@ -717,7 +752,7 @@ void rs232Network::rs232_special_40()
     // Handle commands that exist outside of an open channel.
     switch (cmdFrame.comnd)
     {
-    case 0x30:
+    case FUJICMD_GETCWD:
         rs232_get_prefix();
         return;
     }
@@ -740,25 +775,25 @@ void rs232Network::rs232_special_80()
     // Handle commands that exist outside of an open channel.
     switch (cmdFrame.comnd)
     {
-    case 0x20: // RENAME
-    case 0x21: // DELETE
-    case 0x23: // LOCK
-    case 0x24: // UNLOCK
-    case 0x2A: // MKDIR
-    case 0x2B: // RMDIR
+    case FUJICMD_RENAME:
+    case FUJICMD_DELETE:
+    case FUJICMD_LOCK:
+    case FUJICMD_UNLOCK:
+    case FUJICMD_MKDIR:
+    case FUJICMD_RMDIR:
         rs232_do_idempotent_command_80();
         return;
-    case 0x2C: // CHDIR
+    case FUJICMD_CHDIR:
         rs232_set_prefix();
         return;
-    case 'Q':
+    case FUJICMD_QUERY:
         if (channelMode == JSON)
             rs232_set_json_query();
         return;
-    case 0xFD: // LOGIN
+    case FUJICMD_USERNAME:
         rs232_set_login();
         return;
-    case 0xFE: // PASSWORD
+    case FUJICMD_PASSWORD:
         rs232_set_password();
         return;
     }
@@ -777,54 +812,83 @@ void rs232Network::rs232_special_80()
         rs232_error();
 }
 
+void rs232Network::rs232_seek()
+{
+    rs232_ack();
+    protocol->seek(le32toh(cmdFrame.aux), SEEK_SET);
+    rs232_complete();
+    return;
+}
+
+void rs232Network::rs232_tell()
+{
+    off_t offset;
+    uint32_t retval;
+
+
+    // Acknowledge
+    rs232_ack();
+
+    offset = protocol->seek(0, SEEK_CUR);
+    if (offset == -1) {
+        status.error = NETWORK_ERROR_SERVER_GENERAL;
+        rs232_error();
+        return;
+    }
+
+    retval = htole32(offset);
+    bus_to_computer((unsigned char *) &retval, 4, false);
+    return;
+}
+
 /**
  * Process incoming RS232 command for device 0x7X
  * @param comanddata incoming 4 bytes containing command and aux bytes
  * @param checksum 8 bit checksum
  */
-void rs232Network::rs232_process(uint32_t commanddata, uint8_t checksum)
+void rs232Network::rs232_process(cmdFrame_t *cmd_ptr)
 {
-    cmdFrame.commanddata = commanddata;
-    cmdFrame.checksum = checksum;
-
     Debug_printf("rs232Network::rs232_process 0x%02hx '%c': 0x%02hx, 0x%02hx\n",
-                 cmdFrame.comnd, cmdFrame.comnd, cmdFrame.aux1, cmdFrame.aux2);
+                 cmd_ptr->comnd, cmd_ptr->comnd, cmd_ptr->aux1, cmd_ptr->aux2);
 
+    cmdFrame = *cmd_ptr;
     switch (cmdFrame.comnd)
     {
-    case 0x3F:
-        rs232_ack();
-        rs232_high_speed();
-        break;
-    case 'O':
+    case FUJICMD_OPEN:
         rs232_open();
         break;
-    case 'C':
+    case FUJICMD_CLOSE:
         rs232_close();
         break;
-    case 'R':
+    case FUJICMD_READ:
         rs232_read();
         break;
-    case 'W':
+    case FUJICMD_WRITE:
         rs232_write();
         break;
-    case 'S':
+    case FUJICMD_STATUS:
         rs232_status();
         break;
-    case 'P':
+    case FUJICMD_PARSE:
         rs232_ack();
         rs232_parse_json();
         break;
-    case 'Q':
+    case FUJICMD_QUERY:
         rs232_ack();
         rs232_set_json_query();
         break;
-    case 0xFC:
+    case FUJICMD_JSON:
         rs232_ack();
         rs232_set_channel_mode();
         break;
-    case 0xFF:
+    case FUJICMD_SPECIAL_QUERY:
         rs232_special_inquiry();
+        break;
+    case FUJICMD_SEEK:
+        rs232_seek();
+        break;
+    case FUJICMD_TELL:
+        rs232_tell();
         break;
     default:
         rs232_special();
@@ -846,10 +910,12 @@ void rs232Network::rs232_poll_interrupt()
         protocol->status(&status);
         protocol->fromInterrupt = false;
 
-        if (status.rxBytesWaiting > 0 || status.connected == 0)
+        if (protocol->available() > 0 || status.connected == 0)
             rs232_assert_interrupt();
+#ifdef ESP_PLATFORM
         else
             fnSystem.digital_write(PIN_RS232_RI,DIGI_HIGH);
+#endif /* ESP_PLATFORM */
 
         reservedSave = status.connected;
         errorSave = status.error;
@@ -868,7 +934,7 @@ bool rs232Network::instantiate_protocol()
     {
         protocolParser = new ProtocolParser();
     }
-    
+
     protocol = protocolParser->createProtocol(urlParser->scheme, receiveBuffer, transmitBuffer, specialBuffer, &login, &password);
 
     if (protocol == nullptr)
@@ -894,6 +960,12 @@ void rs232Network::create_devicespec()
     bus_to_peripheral(devicespecBuf, sizeof(devicespecBuf));
     util_devicespec_fix_9b(devicespecBuf, sizeof(devicespecBuf));
     deviceSpec = string((char *)devicespecBuf);
+
+    /* Clear Prefix if a full URL with Protocol is specified. */
+    if (deviceSpec.find("://") != string::npos)
+    {
+        prefix.clear();
+    }
 
     deviceSpec = util_devicespec_fix_for_parsing(deviceSpec, prefix, cmdFrame.aux1 == 6, true);
 }
@@ -936,6 +1008,7 @@ void rs232Network::parse_and_instantiate_protocol()
     }
 }
 
+#ifdef ESP_PLATFORM
 /**
  * Start the Interrupt rate limiting timer
  */
@@ -964,6 +1037,7 @@ void rs232Network::timer_stop()
         rateTimerHandle = nullptr;
     }
 }
+#endif /* ESP_PLATFORM */
 
 /**
  * We were passed a COPY arg from DOS 2. This is complex, because we need to parse the comma,
@@ -1010,8 +1084,10 @@ void rs232Network::processCommaFromDevicespec()
  * Called to pulse the PROCEED interrupt, rate limited by the interrupt timer.
  */
 void rs232Network::rs232_assert_interrupt()
-{ 
+{
+#ifdef ESP_PlATFORM
     fnSystem.digital_write(PIN_RS232_RI, interruptProceed == true ? DIGI_HIGH : DIGI_LOW);
+#endif /* ESP_PLATFORM */
 }
 
 void rs232Network::rs232_set_translation()
@@ -1060,12 +1136,14 @@ void rs232Network::rs232_set_timer_rate()
 {
     timerRate = (cmdFrame.aux2 * 256) + cmdFrame.aux1;
 
+#ifdef ESP_PLATFORM
     // Stop extant timer
     timer_stop();
 
     // Restart timer if we're running a protocol.
     if (protocol != nullptr)
         timer_start();
+#endif /* ESP_PLATFORM */
 
     rs232_complete();
 }

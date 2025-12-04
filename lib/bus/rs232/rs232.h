@@ -1,53 +1,45 @@
 #ifndef RS232_H
 #define RS232_H
 
+#include "UARTChannel.h"
+#include "fujiDeviceID.h"
+
+#ifdef ESP_PLATFORM
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#endif /* ESP_PLATFORM */
 
 #include <forward_list>
 
 #define RS232_BAUDRATE 9600
-
-#define RS232_DEVICEID_DISK 0x31
-#define RS232_DEVICEID_DISK_LAST 0x3F
-
-#define RS232_DEVICEID_PRINTER 0x40
-#define RS232_DEVICEID_PRINTER_LAST 0x43
-
-#define RS232_DEVICEID_FN_VOICE 0x43
-
-#define RS232_DEVICEID_APETIME 0x45
-
-#define RS232_DEVICEID_RS232 0x50
-#define RS232_DEVICEID_RS2323_LAST 0x53
-
-#define RS232_DEVICEID_FUJINET 0x70
-#define RS232_DEVICEID_FN_NETWORK 0x71
-#define RS232_DEVICEID_FN_NETWORK_LAST 0x78
-
-#define RS232_DEVICEID_MIDI 0x99
-
-#define RS232_DEVICEID_CPM 0x5A
+//#define RS232_BAUDRATE 115200
 
 #define DELAY_T4 800
 #define DELAY_T5 800
 
-union cmdFrame_t
+#define DIRECTION_NONE    0x00
+#define DIRECTION_READ    0x40
+#define DIRECTION_WRITE   0x80
+
+typedef struct
 {
-    struct
-    {
-        uint8_t device;
-        uint8_t comnd;
-        uint8_t aux1;
-        uint8_t aux2;
-        uint8_t cksum;
+    uint8_t device;
+    uint8_t comnd;
+    union {
+        struct {
+            uint8_t aux1;
+            uint8_t aux2;
+            uint8_t aux3;
+            uint8_t aux4;
+        };
+        struct {
+            uint16_t aux12;
+            uint16_t aux34;
+        };
+        uint32_t aux;
     };
-    struct
-    {
-        uint32_t commanddata;
-        uint8_t checksum;
-    } __attribute__((packed));
-};
+    uint8_t cksum;
+} __attribute__((packed)) cmdFrame_t;
 
 // helper functions
 uint8_t rs232_checksum(uint8_t *buf, unsigned short len);
@@ -67,7 +59,7 @@ class virtualDevice
 protected:
     friend systemBus;
 
-    int _devnum;
+    fujiDeviceID_t _devnum;
 
     cmdFrame_t cmdFrame;
     bool listen_to_type3_polls = false;
@@ -119,12 +111,15 @@ protected:
     void rs232_error();
 
     /**
-     * @brief Return the two aux bytes in cmdFrame as a single 16-bit value, commonly used, for example to retrieve
-     * a sector number, for disk, or a number of bytes waiting for the rs232Network device.
-     * 
-     * @return 16-bit value of DAUX1/DAUX2 in cmdFrame.
+     * @brief Return the aux bytes in cmdFrame as a single 16-bit or
+     * 32-bit value, commonly used, for example to retrieve a sector
+     * number, for disk, or a number of bytes waiting for the
+     * rs232Network device.
      */
-    unsigned short rs232_get_aux();
+    // FIXME - these should probably be macros
+    uint16_t rs232_get_aux16_lo();
+    uint16_t rs232_get_aux16_hi();
+    uint32_t rs232_get_aux32();
 
     /**
      * @brief All RS232 commands by convention should return a status command, using bus_to_computer() to return
@@ -133,10 +128,10 @@ protected:
     virtual void rs232_status() = 0;
 
     /**
-     * @brief All RS232 devices repeatedly call this routine to fan out to other methods for each command. 
+     * @brief All RS232 devices repeatedly call this routine to fan out to other methods for each command.
      * This is typcially implemented as a switch() statement.
      */
-    virtual void rs232_process(uint32_t commanddata, uint8_t checksum) = 0;
+    virtual void rs232_process(cmdFrame_t *cmd_ptr) = 0;
 
     // Optional shutdown/reboot cleanup routine
     virtual void shutdown(){};
@@ -146,7 +141,7 @@ public:
      * @brief get the RS232 device Number (1-255)
      * @return The device number registered for this device
      */
-    int id() { return _devnum; };
+    fujiDeviceID_t id() { return _devnum; };
 
     /**
      * @brief Command 0x3F '?' intended to return a single byte to the atari via bus_to_computer(), which
@@ -168,11 +163,6 @@ public:
      * @brief status wait counter
      */
     uint8_t status_wait_count = 5;
-
-    /**
-     * @brief Get the systemBus object that this virtualDevice is attached to.
-     */
-    systemBus rs232_get_bus();
 };
 
 enum rs232_message : uint16_t
@@ -210,6 +200,12 @@ private:
 
     bool useUltraHigh = false; // Use fujinet derived clock.
 
+#if FUJINET_OVER_USB
+    ACMChannel _port;
+#else /* ! FUJINET_OVER_USB */
+    UARTChannel _port;
+#endif /* FUJINET_OVER_USB */
+
     void _rs232_process_cmd();
     /* void _rs232_process_queue(); */
 
@@ -219,10 +215,10 @@ public:
     void shutdown();
 
     int numDevices();
-    void addDevice(virtualDevice *pDevice, int device_id);
+    void addDevice(virtualDevice *pDevice, fujiDeviceID_t device_id);
     void remDevice(virtualDevice *pDevice);
-    virtualDevice *deviceById(int device_id);
-    void changeDeviceId(virtualDevice *pDevice, int device_id);
+    virtualDevice *deviceById(fujiDeviceID_t device_id);
+    void changeDeviceId(virtualDevice *pDevice, fujiDeviceID_t device_id);
 
     int getBaudrate();                                          // Gets current RS232 baud rate setting
     void setBaudrate(int baud);                                 // Sets RS232 to specific baud rate
@@ -240,12 +236,23 @@ public:
     rs232Printer *getPrinter() { return _printerdev; }
     rs232CPM *getCPM() { return _cpmDev; }
 
-    QueueHandle_t qRs232Messages = nullptr;
 
     bool shuttingDown = false;                                  // TRUE if we are in shutdown process
     bool getShuttingDown() { return shuttingDown; };
+
+    // Everybody thinks "oh I know how a serial port works, I'll just
+    // access it directly and bypass the bus!" ಠ_ಠ
+    size_t read(void *buffer, size_t length) { return _port.read(buffer, length); }
+    size_t read() { return _port.read(); }
+    size_t write(const void *buffer, size_t length) { return _port.write(buffer, length); }
+    size_t write(int n) { return _port.write(n); }
+    size_t available() { return _port.available(); }
+    void flushOutput() { _port.flushOutput(); }
+    size_t print(int n, int base = 10) { return _port.print(n, base); }
+    size_t print(const char *str) { return _port.print(str); }
+    size_t print(const std::string &str) { return _port.print(str); }
 };
 
-extern systemBus RS232;
+extern systemBus SYSTEM_BUS;
 
 #endif // guard

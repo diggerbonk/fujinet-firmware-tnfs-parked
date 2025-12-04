@@ -1,13 +1,19 @@
 
 #include "samlib.h"
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/timers.h>
-#include <driver/gpio.h>
-#ifndef CONFIG_IDF_TARGET_ESP32S3
-#include <driver/dac.h>
+#ifdef ESP_PLATFORM
+  #include <freertos/FreeRTOS.h>
+  #include <freertos/timers.h>
+  #include <driver/gpio.h>
+  #ifndef CONFIG_IDF_TARGET_ESP32S3
+  #include <driver/dac_oneshot.h>
+  #endif
+#else
+  #define MA_NO_DECODING
+  #define MA_NO_ENCODING
+  #include "miniaudio.c"
+  #include "compat_string.h"
 #endif
-
 
 #include "fnSystem.h"
 
@@ -210,31 +216,25 @@ void OutputSound()
 
 #else //Not def USESDL
 
+#ifdef ESP_PLATFORM
 void OutputSound()
 {
-#ifdef ESP_PLATFORM
 #ifndef CONFIG_IDF_TARGET_ESP32S3
     int n = GetBufferLength() / 50;
     char *s = GetBuffer();
 
-    //fnSystem.dac_output_enable(SystemManager::dac_channel_t::DAC_CHANNEL_1);
-    //fnSystem.dac_output_voltage(SystemManager::dac_channel_t::DAC_CHANNEL_1, 100);
+    dac_oneshot_handle_t dac_handle;
+    dac_oneshot_config_t config = {
+      .chan_id = DAC_CHAN_0
+    };
 
-    dac_output_enable(DAC_CHANNEL_1);
-
-    for (int i = 0; i < n; i++)
-    {
-        //dacWrite(DAC1, s[i]);
-        // fnSystem.dac_write(PIN_DAC1, s[i]);
-        dac_output_voltage(DAC_CHANNEL_1, s[i]);
-        //delayMicroseconds(40);
-        fnSystem.delay_microseconds(40);
+    if (dac_oneshot_new_channel(&config, &dac_handle) == ESP_OK) {
+        for (int i = 0; i < n; i++) {
+            dac_oneshot_output_voltage(dac_handle, (uint8_t)s[i]); // ensure unsigned
+            fnSystem.delay_microseconds(40);
+        }
+        dac_oneshot_del_channel(dac_handle);
     }
-
-    //fnSystem.dac_output_disable(SystemManager::dac_channel_t::DAC_CHANNEL_1);
-    dac_output_disable(DAC_CHANNEL_1);
-
-    FreeBuffer();
 #else //Defined CONFIG_IDF_TARGET_ESP32S3
 //SampleRate = 22050
 //8 Bits
@@ -254,51 +254,39 @@ void OutputSound()
 //Init/Config
         i2s_chan_handle_t tx_handle;
         /* Allocate an I2S tx channel */
-        i2s_chan_config_t chan_cfg = //I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-                    { 
-                    .id = I2S_NUM_0, 
-                    .role = I2S_ROLE_MASTER, 
-                    .dma_desc_num = 4,//6, 
-                    .dma_frame_num = 1024,//240, 
-                    .auto_clear = false, 
-                };
+        i2s_chan_config_t chan_cfg;
+        chan_cfg.id = I2S_NUM_0;
+        chan_cfg.role = I2S_ROLE_MASTER;
+        chan_cfg.dma_desc_num = 4; //6
+        chan_cfg.dma_frame_num = 1024; //240
+        chan_cfg.auto_clear = false;
         i2s_new_channel(&chan_cfg, &tx_handle, NULL);
 
         /* Init the channel into PDM TX mode */
-        i2s_pdm_tx_config_t pdm_tx_cfg = {
-            .clk_cfg = //I2S_PDM_TX_CLK_DEFAULT_CONFIG(sample_rate),
-                     { 
-                    .sample_rate_hz = sample_rate, 
-                    .clk_src = I2S_CLK_SRC_DEFAULT, 
-                    .mclk_multiple = I2S_MCLK_MULTIPLE_256, 
-                    .up_sample_fp = 960, 
-                    .up_sample_fs = 480  
-                },
+        i2s_pdm_tx_config_t pdm_tx_cfg;
+        pdm_tx_cfg.clk_cfg.sample_rate_hz = sample_rate;
+        pdm_tx_cfg.clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
+        pdm_tx_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+        pdm_tx_cfg.clk_cfg.up_sample_fp = 960;
+        pdm_tx_cfg.clk_cfg.up_sample_fs = 480;
 
-            .slot_cfg = //I2S_PDM_TX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
-                    { 
-                    .data_bit_width = I2S_DATA_BIT_WIDTH_16BIT, 
-                    .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO, 
-                    .slot_mode = I2S_SLOT_MODE_MONO, //I2S_SLOT_MODE_STEREO,
-                    .sd_prescale = 0, 
-                    .sd_scale = I2S_PDM_SIG_SCALING_MUL_1, 
-                    .hp_scale = I2S_PDM_SIG_SCALING_MUL_1, //I2S_PDM_SIG_SCALING_DIV_2, 
-                    .lp_scale = I2S_PDM_SIG_SCALING_MUL_1, 
-                    .sinc_scale = I2S_PDM_SIG_SCALING_MUL_1, 
-                    .line_mode = I2S_PDM_TX_ONE_LINE_DAC, //I2S_PDM_TX_ONE_LINE_CODEC
-                    .hp_en = true, 
-                    .hp_cut_off_freq_hz = 49, // 35.5, 
-                    .sd_dither = 0, 
-                    .sd_dither2 = 1, 
-                },
-            .gpio_cfg = {
-                .clk = GPIO_NUM_NC,//(gpio_num_t) I2S_PIN_NO_CHANGE, //GPIO_NUM_5,
-                .dout = PIN_DAC1,//GPIO_NUM_18,
-                .invert_flags = {
-                    .clk_inv = false,
-                },
-            },
-        };
+        pdm_tx_cfg.slot_cfg.data_bit_width = I2S_DATA_BIT_WIDTH_16BIT;
+        pdm_tx_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO;
+        pdm_tx_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO; //I2S_SLOT_MODE_STEREO
+        pdm_tx_cfg.slot_cfg.sd_prescale = 0;
+        pdm_tx_cfg.slot_cfg.sd_scale = I2S_PDM_SIG_SCALING_MUL_1;
+        pdm_tx_cfg.slot_cfg.hp_scale = I2S_PDM_SIG_SCALING_MUL_1; //I2S_PDM_SIG_SCALING_DIV_2
+        pdm_tx_cfg.slot_cfg.lp_scale = I2S_PDM_SIG_SCALING_MUL_1;
+        pdm_tx_cfg.slot_cfg.sinc_scale = I2S_PDM_SIG_SCALING_MUL_1;
+        pdm_tx_cfg.slot_cfg.line_mode = I2S_PDM_TX_ONE_LINE_DAC; //I2S_PDM_TX_ONE_LINE_CODEC
+        pdm_tx_cfg.slot_cfg.hp_en = true;
+        pdm_tx_cfg.slot_cfg.hp_cut_off_freq_hz = 49; // 35.5
+        pdm_tx_cfg.slot_cfg.sd_dither = 0;
+        pdm_tx_cfg.slot_cfg.sd_dither2 = 1;
+
+        pdm_tx_cfg.gpio_cfg.clk = GPIO_NUM_NC; //(gpio_num_t) I2S_PIN_NO_CHANGE; //GPIO_NUM_5
+        pdm_tx_cfg.gpio_cfg.dout = PIN_DAC1; //GPIO_NUM_18
+        pdm_tx_cfg.gpio_cfg.invert_flags.clk_inv = false;
 
         i2s_channel_init_pdm_tx_mode(tx_handle, &pdm_tx_cfg);
         i2s_channel_enable(tx_handle);
@@ -364,12 +352,62 @@ void OutputSound()
     }
 #endif    //ESP32S3_I2S_OUT
 
-    FreeBuffer();    
-
-
 #endif //CONFIG_IDF_TARGET_ESP32S3
-#endif //ESP_PLATFORM
 }
+
+// end of ESP_PLATFORM
+#else
+// !ESP_PLATFORM
+
+static int pos = 0;
+void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
+{
+    int bufferpos = GetBufferLength() / 50;
+    char *buffer = GetBuffer();
+    int i;
+    bool *done_ptr = static_cast<bool *>(pDevice->pUserData);
+    if (pos >= bufferpos)
+    {
+        *done_ptr = true;
+        return;
+    }
+    if ((bufferpos - pos) < frameCount)
+        frameCount = (bufferpos - pos);
+    for (i = 0; i < frameCount; i++)
+    {
+        ((char *)pOutput)[i] = buffer[pos];
+        pos++;
+    }
+}
+
+void OutputSound()
+{
+    pos = 0;
+    bool done = false;
+    ma_device_config config  = ma_device_config_init(ma_device_type_playback);
+    config.playback.format   = ma_format_u8;    // Set to ma_format_unknown to use the device's native format.
+    config.playback.channels = 1;               // Set to 0 to use the device's native channel count.
+    config.sampleRate        = sample_rate;     // Set to 0 to use the device's native sample rate.
+    config.dataCallback      = data_callback;   // This function will be called when miniaudio needs more data.
+    config.pUserData         = &done;           // Can be accessed from the device object (device.pUserData).
+
+    ma_device device;
+    if (ma_device_init(NULL, &config, &device) != MA_SUCCESS) {
+        return;  // Failed to initialize the device.
+    }
+
+    ma_device_start(&device);     // The device is sleeping by default so you'll need to start it manually.
+
+    // Do something here.
+    while (!done) {
+        fnSystem.delay(100);
+    }
+
+    ma_device_uninit(&device);
+}
+
+    // end of !ESP_PLATFORM
+#endif
 
 #endif //USESDL
 
@@ -513,19 +551,22 @@ int sam(int argc, char **argv)
 
     // printf("right before SAMMain");
 
-    if (!SAMMain())
+    if (!SAMMain()) // buffer is allocated in SAMMain, used by OutputSound and WriteWav
     {
         PrintUsage();
         return 1;
     }
     // printf("right after SAMMain");
 
-#ifndef ESP_PLATFORM
-    if (wavfilename != NULL)
-        WriteWav(wavfilename, GetBuffer(), GetBufferLength() / 50);
-    else
-#endif // ESP_PLATFORM
+// apc: any use of WriteWav on fujinet-pc?
+// #ifndef ESP_PLATFORM
+    
+//     if (wavfilename != NULL)
+//         WriteWav(wavfilename, GetBuffer(), GetBufferLength() / 50);
+//     else
+// #endif // ESP_PLATFORM
         OutputSound();
 
+    FreeBuffer();
     return 0;
 }

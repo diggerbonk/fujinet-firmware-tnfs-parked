@@ -10,7 +10,7 @@
 #include "fnWiFi.h"
 #include "fsFlash.h"
 #include "httpService.h"
-#include "fuji.h"
+#include "fujiDevice.h"
 
 using namespace std;
 
@@ -59,14 +59,17 @@ const string fnHttpServiceParser::substitute_tag(const string &tag)
         FN_PULLDOWN,
         FN_CASSETTE_ENABLED,
         FN_CONFIG_ENABLED,
+        FN_CONFIG_NG,
         FN_STATUS_WAIT_ENABLED,
         FN_BOOT_MODE,
         FN_PRINTER_ENABLED,
         FN_MODEM_ENABLED,
         FN_MODEM_SNIFFER_ENABLED,
+#if !defined(ESP_PLATFORM) || defined(BUILD_RS232)
+        FN_SERIAL_PORT_BAUD,
+#endif
 #ifndef ESP_PLATFORM
         FN_SERIAL_PORT,
-        FN_SERIAL_PORT_BAUD,
         FN_SERIAL_COMMAND,
         FN_SERIAL_PROCEED,
         FN_SIO_HSTEXT,
@@ -176,14 +179,17 @@ const string fnHttpServiceParser::substitute_tag(const string &tag)
         "FN_PULLDOWN",
         "FN_CASSETTE_ENABLED",
         "FN_CONFIG_ENABLED",
+        "FN_CONFIG_NG",
         "FN_STATUS_WAIT_ENABLED",
         "FN_BOOT_MODE",
         "FN_PRINTER_ENABLED",
         "FN_MODEM_ENABLED",
         "FN_MODEM_SNIFFER_ENABLED",
+#if !defined(ESP_PLATFORM) || defined(BUILD_RS232)
+        "FN_SERIAL_PORT_BAUD",
+#endif
 #ifndef ESP_PLATFORM
         "FN_SERIAL_PORT",
-        "FN_SERIAL_PORT_BAUD",
         "FN_SERIAL_COMMAND",
         "FN_SERIAL_PROCEED",
         "FN_SIO_HSTEXT",
@@ -373,19 +379,19 @@ const string fnHttpServiceParser::substitute_tag(const string &tag)
         break;
 #ifdef BUILD_ATARI
     case FN_SIO_HSINDEX:
-        resultstream << SIO.getHighSpeedIndex();
+        resultstream << SYSTEM_BUS.getHighSpeedIndex();
         break;
 #ifndef ESP_PLATFORM
     case FN_SIO_HSTEXT:
-        hsioindex = SIO.getHighSpeedIndex();
-        if (hsioindex == HSIO_DISABLED_INDEX)
+        hsioindex = SYSTEM_BUS.getHighSpeedIndex();
+        if (hsioindex == HSIO_INVALID_INDEX)
             resultstream << "HSIO Disabled";
         else
             resultstream << hsioindex;
         break;
 #endif
     case FN_SIO_HSBAUD:
-        resultstream << SIO.getHighSpeedBaud();
+        resultstream << SYSTEM_BUS.getHighSpeedBaud();
         break;
 #endif /* BUILD_ATARI */
 #ifndef ESP_PLATFORM
@@ -440,19 +446,22 @@ const string fnHttpServiceParser::substitute_tag(const string &tag)
         break;
 #ifdef BUILD_ATARI
     case FN_PLAY_RECORD:
-        if (theFuji.cassette()->get_buttons())
+        if (theFuji->cassette()->get_buttons())
             resultstream << "0 PLAY";
         else
             resultstream << "1 RECORD";
         break;
     case FN_PULLDOWN:
-        if (theFuji.cassette()->has_pulldown())
+        if (theFuji->cassette()->has_pulldown())
             resultstream << "1 Pulldown Resistor";
         else
             resultstream << "0 B Button Press";
         break;
     case FN_CASSETTE_ENABLED:
         resultstream << Config.get_cassette_enabled();
+        break;
+    case FN_CONFIG_NG:
+        resultstream << Config.get_general_config_ng();
         break;
 #endif /* BUILD_ATARI */
     case FN_CONFIG_ENABLED:
@@ -561,7 +570,7 @@ const string fnHttpServiceParser::substitute_tag(const string &tag)
     case FN_DRIVE8DEVICE:
         /* What Dx: drive (if any rotation has occurred) does each Drive Slot currently map to? */
         drive_slot = tagid - FN_DRIVE1DEVICE;
-        disk_id = (char) theFuji.get_disk_id(drive_slot);
+        disk_id = (char) theFuji->get_disk_id(drive_slot);
         if (disk_id > 0 && disk_id != (char) (0x31 + drive_slot)) {
             resultstream << " (D" << disk_id << ":)";
         }
@@ -578,7 +587,7 @@ const string fnHttpServiceParser::substitute_tag(const string &tag)
            for the TNFS host mounted on each Host Slot? */
         host_slot = tagid - FN_HOST1PREFIX;
         if (Config.get_host_type(host_slot) != fnConfig::host_types::HOSTTYPE_INVALID) {
-            resultstream << theFuji.get_host_prefix(host_slot);
+            resultstream << theFuji->get_host_prefix(host_slot);
         } else {
             resultstream << "";
         }

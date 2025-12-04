@@ -1,12 +1,11 @@
 #ifdef BUILD_MAC
 #include "mac.h"
-#include "../../include/debug.h"
-#include "../device/mac/fuji.h"
-
 #include "mac_ll.h"
+#include "macFuji.h"
 
+#include "../../include/debug.h"
 
-void macBus::setup(void)
+void systemBus::setup(void)
 {
   Debug_printf(("\r\nMAC FujiNet based on FujiApple\r\n"));
   fnUartBUS.begin(_mac_baud_rate);
@@ -14,27 +13,27 @@ void macBus::setup(void)
   // GPIO needs to read Head Select (SEL)
   floppy_ll.setup_gpio();
   Debug_printf("\r\nGPIO configured");
-  
+
   floppy_ll.setup_rmt();
   Debug_printf("\r\nRMT configured for Floppy Output");
 }
 
 /**
  * 699-0452-A Double Sided floppy requirement document
- * 
+ *
  * The host system can send four commands: /DIRTN,/STEP,
  * /MOTORON and EJECT. To send one of the control commands to the
  * drive, set CA2 to the value (a zero or a one) to which the host
  * system wishes the command to be set, and then set CAO, CA 1, and
  * SEL to the value which selects the desired command. Finally, bring
  * LSTRB first high and then low.
- * 
+ *
  *               SEL CA2 CA1 CA0   value
  * /DIRTN         0   0   0   0     0     increase track number
  * /DIRTN         0   1   0   0     4     decrease track number
  * /STEP          0   0   0   1     1     step the head in the direction
  * /STEP          0   1   0   1     5     probably not used
- * /MOTORON       0   0   1   0     2     turn motor on    
+ * /MOTORON       0   0   1   0     2     turn motor on
  * /MOTORON       0   1   1   0     6     turn motor off
  * EJECT          0   0   1   1     3     probably not used
  * EJECT          0   1   1   1     7     eject the disk
@@ -44,14 +43,14 @@ void macBus::setup(void)
  * for DCD (HD20) the protocol is different.
  * need to read and write blocks
  * would be nice to fetch the image name so it can be displayed on the mac
- * 
+ *
  * block numbers are 3 bytes, 512 bytes/block - 8GB addressable, but MAC OS limites to 2 GB
- * 
+ *
 */
 
 uint8_t sector_buffer[512];
 
-void macBus::service(void)
+void systemBus::service(void)
 {
   // todo - figure out two floppies - either on RP2040 or ESP32 side. Use the two enable lines - get_disks(0 or 1)
   if (fnUartBUS.available())
@@ -65,14 +64,14 @@ void macBus::service(void)
       case 0:
         // set direction to increase track number
         Debug_printf("%c", 'I');
-        theFuji.get_disks(4)->disk_dev.set_dir(+1);
+        theFuji->get_disk(4)->disk_dev.set_dir(+1);
         // fnUartBUS.write('I');
         // fnUartBUS.flush();
         break;
       case 4:
         // set direction to decrease track number
         Debug_printf("%c", 'D');
-        theFuji.get_disks(4)->disk_dev.set_dir(-1);
+        theFuji->get_disk(4)->disk_dev.set_dir(-1);
         // fnUartBUS.write('D');
         // fnUartBUS.flush();
         break;
@@ -82,7 +81,7 @@ void macBus::service(void)
         {
           t0 = fnSystem.micros();
           track_not_copied = true;
-          int track_position = theFuji.get_disks(4)->disk_dev.step();
+          int track_position = theFuji->get_disk(4)->disk_dev.step();
           if (track_position < 0)
           {
             fnUartBUS.write('N');
@@ -111,21 +110,21 @@ void macBus::service(void)
         // eject
         Debug_printf("\neject - unmounting");
         floppy_ll.stop();
-        theFuji.get_disks(4)->disk_dev.unmount();
+        theFuji->get_disk(4)->disk_dev.unmount();
         fnUartBUS.write('E');
         // fnUartBUS.flush();
         break;
       default:
-        Debug_printf("%03d");
+        //Debug_printf("%03d");
         fnUartBUS.write('X');
         // fnUartBUS.flush();
         break;
       }
     }
     else // DCD
-    { 
+    {
       switch (c)
-      { 
+      {
       case 'A':
       case 'B':
       case 'C':
@@ -137,7 +136,7 @@ void macBus::service(void)
       case 'R':
       case 'T':
       case 'W':
-        theFuji.get_disks(_active_DCD_disk)->disk_dev.process(c);
+        theFuji->get_disk(_active_DCD_disk)->disk_dev.process(c);
         break;
       default:
         break;
@@ -146,13 +145,13 @@ void macBus::service(void)
   }
   if (track_not_copied && stepper_timeout())
   {
-    theFuji.get_disks(4)->disk_dev.update_track_buffers();
+    theFuji->get_disk(4)->disk_dev.update_track_buffers();
     track_not_copied = false;
     fnUartBUS.write('S');
   }
 }
 
-char macBus::num_dcd_mounts()
+char systemBus::num_dcd_mounts()
 {
   // find maximum consecutively occupied disk slot
   char d = 0;
@@ -161,7 +160,7 @@ char macBus::num_dcd_mounts()
   return d;
 }
 
-void macBus::add_dcd_mount(char c)
+void systemBus::add_dcd_mount(char c)
 {
   _mounted_dcd_disks |= 1 << (c - '0');
   // find maximum consecutively occupied disk slot
@@ -170,7 +169,7 @@ void macBus::add_dcd_mount(char c)
   fnUartBUS.write(d);   // number of DCD's in a contiguous daisy chain
 }
 
-void macBus::rem_dcd_mount(char c)
+void systemBus::rem_dcd_mount(char c)
 {
   _mounted_dcd_disks &= ~(1 << (c - '0'));
   char d = num_dcd_mounts();
@@ -178,13 +177,13 @@ void macBus::rem_dcd_mount(char c)
   fnUartBUS.write(d);   // number of DCD's in a contiguous daisy chain
 }
 
-bool macBus::stepper_timeout()
+bool systemBus::stepper_timeout()
 {
   unsigned long tn = fnSystem.micros();
   return ((tn - t0) > 2000);
 }
 
-void macBus::shutdown(void)
+void systemBus::shutdown(void)
 {
   shuttingDown = true;
 
@@ -734,7 +733,7 @@ void IRAM_ATTR iwmBus::service()
     break;
   case iwm_enable_state_t::off2on:
     // need to start a counter and wait to turn on enable output after 1 ms only iff enable state is on
-    if (theFuji._fnDisk2s[diskii_xface.iwm_enable_states() - 1].device_active)
+    if (theFuji->_fnDisk2s[diskii_xface.iwm_enable_states() - 1].device_active)
     {
       fnSystem.delay(1); // need a better way to figure out persistence
       if (iwm_drive_enabled() == iwm_enable_state_t::on)
@@ -751,7 +750,7 @@ void IRAM_ATTR iwmBus::service()
     return; // return so the SP code doesn't get checked
   case iwm_enable_state_t::on:
 #ifdef DEBUG
-    new_track = theFuji._fnDisk2s[diskii_xface.iwm_enable_states() - 1].get_track_pos();
+    new_track = theFuji->_fnDisk2s[diskii_xface.iwm_enable_states() - 1].get_track_pos();
     if (old_track != new_track)
     {
       Debug_printf("\ntrk pos %03d on d%d", new_track, diskii_xface.iwm_enable_states());
@@ -818,7 +817,7 @@ void iwmBus::handle_init()
     // tell the Fuji it's device no.
     if (it == _daisyChain.begin())
     {
-      theFuji._devnum = command_packet.dest;
+      theFuji->_devnum = command_packet.dest;
     }
     // assign dev numbers
     pDevice = (*it);

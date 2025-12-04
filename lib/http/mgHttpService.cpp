@@ -14,7 +14,7 @@
 #include "fsFlash.h"
 #include "modem.h"
 #include "printer.h"
-#include "fuji.h"
+#include "fujiDevice.h"
 
 #include "mongoose.h"
 #include "httpService.h"
@@ -149,7 +149,10 @@ void fnHttpService::send_file_parsed(struct mg_connection *c, const char *filena
         }
         else
         {
-            fread(buf, 1, sz, fInput);
+            size_t bytes_read = fread(buf, 1, sz - 1, fInput); // sz - 1 because we added 1 for null terminator
+            if (bytes_read < (sz - 1)) {
+                Debug_printf("Warning: Only read %u of %u bytes from file\n", (unsigned)bytes_read, (unsigned)(sz - 1));
+            }
             string contents(buf);
             free(buf);
             contents = fnHttpServiceParser::parse_contents(contents);
@@ -353,7 +356,7 @@ int fnHttpService::post_handler_config(struct mg_connection *c, struct mg_http_m
 
     _fnwserr err = fnwserr_noerrr;
 
-    if (fnHttpServiceConfigurator::process_config_post(hm->body.ptr, hm->body.len) < 0)
+    if (fnHttpServiceConfigurator::process_config_post(hm->body.buf, hm->body.len) < 0)
     {
         return_http_error(c, fnwserr_post_fail);
         return -1; //ESP_FAIL;
@@ -373,9 +376,9 @@ int fnHttpService::get_handler_browse(mg_connection *c, mg_http_message *hm)
     int pathlen = hm->uri.len - prefixlen -1;
 
     Debug_println("Browse request handler");
-    if (pathlen >= 0 && strncmp(hm->uri.ptr, prefix, hm->uri.len))
+    if (pathlen >= 0 && strncmp(hm->uri.buf, prefix, hm->uri.len))
     {
-        const char *s = hm->uri.ptr + prefixlen;
+        const char *s = hm->uri.buf + prefixlen;
         // /browse/host/{1..8}[/path/on/host...]
         if (*s >= '1' && *s <= '8' && (pathlen == 0 || s[1] == '/'))
         {
@@ -399,7 +402,7 @@ int fnHttpService::get_handler_swap(mg_connection *c, mg_http_message *hm)
 {
     // rotate disk images
     Debug_printf("Disk swap from webui\n");
-    theFuji.image_rotate();
+    theFuji->image_rotate();
     return redirect_or_result(c, hm, 0);
 }
 
@@ -412,9 +415,9 @@ int fnHttpService::get_handler_mount(mg_connection *c, mg_http_message *hm)
         // Mount all the things
         Debug_printf("Mount all from webui\n");
 #ifdef BUILD_ATARI
-        theFuji.mount_all(false);
+        theFuji->mount_all(false);
 #else
-        theFuji.mount_all();
+        theFuji->mount_all();
 #endif
     }
     return redirect_or_result(c, hm, 0);
@@ -436,40 +439,40 @@ int fnHttpService::get_handler_eject(mg_connection *c, mg_http_message *hm)
     else
     {
 #ifdef BUILD_APPLE
-        if(theFuji.get_disks(ds)->disk_dev.device_active) //set disk switched only if device was previosly mounted.
-            theFuji.get_disks(ds)->disk_dev.switched = true;
+        if(theFuji->get_disk(ds)->disk_dev.device_active) //set disk switched only if device was previosly mounted.
+            theFuji->get_disk(ds)->disk_dev.switched = true;
 #endif
-        theFuji.get_disks(ds)->disk_dev.unmount();
+        theFuji->get_disk(ds)->disk_dev.unmount();
 #ifdef BUILD_ATARI
-        if (theFuji.get_disks(ds)->disk_type == MEDIATYPE_CAS || theFuji.get_disks(ds)->disk_type == MEDIATYPE_WAV)
+        if (theFuji->get_disk(ds)->disk_type == MEDIATYPE_CAS || theFuji->get_disk(ds)->disk_type == MEDIATYPE_WAV)
         {
-            theFuji.cassette()->umount_cassette_file();
-            theFuji.cassette()->sio_disable_cassette();
+            theFuji->cassette()->umount_cassette_file();
+            theFuji->cassette()->sio_disable_cassette();
         }
 #endif
-        theFuji.get_disks(ds)->reset();
+        theFuji->get_disk(ds)->reset();
         Config.clear_mount(ds);
         Config.save();
-        theFuji._populate_slots_from_config(); // otherwise they don't show up in config.
-        theFuji.get_disks(ds)->disk_dev.device_active = false;
+        theFuji->_populate_slots_from_config(); // otherwise they don't show up in config.
+        theFuji->get_disk(ds)->disk_dev.device_active = false;
 
         // Finally, scan all device slots, if all empty, and config enabled, enable the config device.
         if (Config.get_general_config_enabled())
         {
-            if ((theFuji.get_disks(0)->host_slot == 0xFF) &&
-                (theFuji.get_disks(1)->host_slot == 0xFF) &&
-                (theFuji.get_disks(2)->host_slot == 0xFF) &&
-                (theFuji.get_disks(3)->host_slot == 0xFF) &&
-                (theFuji.get_disks(4)->host_slot == 0xFF) &&
-                (theFuji.get_disks(5)->host_slot == 0xFF) &&
-                (theFuji.get_disks(6)->host_slot == 0xFF) &&
-                (theFuji.get_disks(7)->host_slot == 0xFF))
+            if ((theFuji->get_disk(0)->host_slot == 0xFF) &&
+                (theFuji->get_disk(1)->host_slot == 0xFF) &&
+                (theFuji->get_disk(2)->host_slot == 0xFF) &&
+                (theFuji->get_disk(3)->host_slot == 0xFF) &&
+                (theFuji->get_disk(4)->host_slot == 0xFF) &&
+                (theFuji->get_disk(5)->host_slot == 0xFF) &&
+                (theFuji->get_disk(6)->host_slot == 0xFF) &&
+                (theFuji->get_disk(7)->host_slot == 0xFF))
             {
-                theFuji.boot_config = true;
+                theFuji->boot_config = true;
 #ifdef BUILD_ATARI
-                theFuji.status_wait_count = 5;
+                theFuji->status_wait_count = 5;
 #endif
-                theFuji.device_active = true;
+                theFuji->device_active = true;
             }
         }
     }
@@ -481,6 +484,33 @@ int fnHttpService::get_handler_eject(mg_connection *c, mg_http_message *hm)
     {
         send_file(c, "redirect_to_index.html");
     }
+    return 0;
+}
+
+int fnHttpService::get_handler_hosts(mg_connection *c, mg_http_message *hm)
+{
+    std::string response = "";
+    for (int hs = 0; hs < 8; hs++) {
+        response += std::string(theFuji->get_host(hs)->get_hostname()) + "\n";
+    }
+    mg_http_reply(c, 200, "", "%s", response.c_str());
+    return 0;
+}
+
+int fnHttpService::post_handler_hosts(mg_connection *c, mg_http_message *hm)
+{
+    char hostslot[2] = "";
+    mg_http_get_var(&hm->query, "hostslot", hostslot, sizeof(hostslot));
+    char hostname[256] = "";
+    mg_http_get_var(&hm->query, "hostname", hostname, sizeof(hostname));
+
+    theFuji->set_slot_hostname(atoi(hostslot), hostname);
+
+    std::string response = "";
+    for (int hs = 0; hs < 8; hs++) {
+        response += std::string(theFuji->get_host(hs)->get_hostname()) + "\n";
+    }
+    mg_http_reply(c, 200, "", "%s", response.c_str());
     return 0;
 }
 
@@ -497,7 +527,7 @@ std::string fnHttpService::shorten_url(std::string url)
 int fnHttpService::get_handler_shorturl(mg_connection *c, mg_http_message *hm)
 {
     // Strip the /url/ from the path
-    std::string id_str = std::string(hm->uri.ptr).substr(5, hm->uri.len-5);
+    std::string id_str = std::string(hm->uri.buf).substr(5, hm->uri.len-5);
     Debug_printf("Short URL handler: %s\n", id_str.c_str());
 
     if (!std::all_of(id_str.begin(), id_str.end(), ::isdigit)) {
@@ -524,23 +554,23 @@ void fnHttpService::cb(struct mg_connection *c, int ev, void *ev_data)
     if (ev == MG_EV_HTTP_MSG)
     {
         struct mg_http_message *hm = (struct mg_http_message *) ev_data;
-        if (mg_http_match_uri(hm, "/test"))
+        if (mg_match(hm->uri, mg_str("/test"), NULL))
         {
             // test handler
             mg_http_reply(c, 200, "", "{\"result\": %d}\n", 1);  // Serve REST
         }
-        else if (mg_http_match_uri(hm, "/"))
+        else if (mg_match(hm->uri, mg_str("/"), NULL))
         {
             // index handler
             send_file(c, "index.html");
         }
-        else if (mg_http_match_uri(hm, "/file"))
+        else if (mg_match(hm->uri, mg_str("/file"), NULL))
         {
             // file handler
             char fname[60];
-            if (hm->query.ptr != NULL && hm->query.len > 0 && hm->query.len < sizeof(fname))
+            if (hm->query.buf != NULL && hm->query.len > 0 && hm->query.len < sizeof(fname))
             {
-                strncpy(fname, hm->query.ptr, hm->query.len);
+                strncpy(fname, hm->query.buf, hm->query.len);
                 fname[hm->query.len] = '\0';
                 send_file(c, fname);
             }
@@ -549,10 +579,10 @@ void fnHttpService::cb(struct mg_connection *c, int ev, void *ev_data)
                 mg_http_reply(c, 400, "", "Bad file request\n");
             }
         }
-        else if (mg_http_match_uri(hm, "/config"))
+        else if (mg_match(hm->uri, mg_str("/config"), NULL))
         {
             // config POST handler
-            if (mg_vcasecmp(&hm->method, "POST") == 0)
+            if (mg_casecmp(hm->method.buf, "POST") == 0)
             {
                 post_handler_config(c, hm);
             }
@@ -561,32 +591,32 @@ void fnHttpService::cb(struct mg_connection *c, int ev, void *ev_data)
                 mg_http_reply(c, 400, "", "Bad config request\n");
             }
         }
-        else if (mg_http_match_uri(hm, "/print"))
+        else if (mg_match(hm->uri, mg_str("/print"), NULL))
         {
             // print handler
             get_handler_print(c);
         }
-        else if (mg_http_match_uri(hm, "/browse/#"))
+        else if (mg_match(hm->uri, mg_str("/browse/#"), NULL))
         {
             // browse handler
             get_handler_browse(c, hm);
         }
-        else if (mg_http_match_uri(hm, "/swap"))
+        else if (mg_match(hm->uri, mg_str("/swap"), NULL))
         {
             // browse handler
             get_handler_swap(c, hm);
         }
-        else if (mg_http_match_uri(hm, "/mount"))
+        else if (mg_match(hm->uri, mg_str("/mount"), NULL))
         {
             // browse handler
             get_handler_mount(c, hm);
         }
-        else if (mg_http_match_uri(hm, "/unmount"))
+        else if (mg_match(hm->uri, mg_str("/unmount"), NULL))
         {
             // eject handler
             get_handler_eject(c, hm);
         }
-        else if (mg_http_match_uri(hm, "/restart"))
+        else if (mg_match(hm->uri, mg_str("/restart"), NULL))
         {
             // get "exit" query variable
             char exit[10] = "";
@@ -604,7 +634,13 @@ void fnHttpService::cb(struct mg_connection *c, int ev, void *ev_data)
                 fnSystem.reboot(500, true); // deferred exit with code 75 -> should be started again
             }
         }
-        else if (mg_http_match_uri(hm, "/url/*"))
+        else if (mg_match(hm->uri, mg_str("/hosts"), NULL)) {
+            if (mg_casecmp(hm->method.buf, "POST") == 0)
+                post_handler_hosts(c, hm);
+            else
+                get_handler_hosts(c, hm);
+        }
+        else if (mg_match(hm->uri, mg_str("/url/*"), NULL))
         {
             get_handler_shorturl(c, hm);
         }

@@ -12,7 +12,7 @@ jobs:
     runs-on: "ubuntu-latest"
     strategy:
       matrix:
-        target-platform: [ATARI, ADAM, APPLE, IEC-LOLIN-D32, IEC-NUGGET, COCO, MASTERIES-REVAB, MASTERIES-REVA-SPIFIX]
+        target-platform: [ATARI, ATARI-8mb, ADAM, APPLE, IEC-LOLIN-D32, IEC-NUGGET, COCO, MASTERIES-REVAB, MASTERIES-REVA-SPIFIX, RS232]
 
     steps:
     - name: Checkout Source
@@ -83,6 +83,9 @@ jobs:
       id: nightly-date
       run: sed -i 's/#define FN_VERSION_DATE "[^"]*"/#define FN_VERSION_DATE "${{ steps.commit-date.outputs.COMMIT_DATE }}"/' /home/runner/work/fujinet-firmware/fujinet-firmware/include/version.h
 
+    - name: Create "version.txt" file
+      run: echo "${{ steps.version.outputs.VERSION }}.${{ matrix.target-platform }}" > ./version.txt
+
     - name: Build release
       run: cd /home/runner/work/fujinet-firmware/fujinet-firmware && /usr/bin/bash ./build.sh -z -l /home/runner/work/fujinet-firmware/fujinet-firmware/.github/workflows/platformio.release-${{ matrix.target-platform }}.ini -i /home/runner/work/fujinet-firmware/fujinet-firmware/platformio-generated.ini
 
@@ -91,7 +94,7 @@ jobs:
 
     - name: Create Release 
       id: create-release
-      uses: softprops/action-gh-release@v2 
+      uses: softprops/action-gh-release@v2.2.2 
       with: 
 #        body_path: ${{ github.workspace }}/.github/nightly-release.txt
         body: |

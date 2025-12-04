@@ -29,9 +29,16 @@ elseif(FUJINET_TARGET STREQUAL "COCO")
     # fujinet.build_board (used by build_webui.py)
     set(FUJINET_BUILD_BOARD fujinet-pc-coco)
     # fujinet.build_bus
-    set(FUJINET_BUILD_BUS IWM)
+    set(FUJINET_BUILD_BUS DRIVEWIRE)
+elseif(FUJINET_TARGET STREQUAL "RS232")
+    # fujinet.build_platform
+    set(FUJINET_BUILD_PLATFORM BUILD_RS232)
+    # fujinet.build_board (used by build_webui.py)
+    set(FUJINET_BUILD_BOARD fujinet-lwm-rs232)
+    # fujinet.build_bus
+    set(FUJINET_BUILD_BUS RS232)
 else()
-    message(FATAL_ERROR "Invalid target: '${FUJINET_TARGET}'. Please choose from 'ATARI', 'APPLE', or 'COCO'.")
+    message(FATAL_ERROR "Invalid target: '${FUJINET_TARGET}'. Please choose from 'RS232', 'ATARI', 'APPLE', or 'COCO'.")
 endif()
 
 if(FUJINET_TARGET STREQUAL "APPLE")
@@ -129,6 +136,7 @@ set(INCLUDE_DIRS include
     lib/devrelay/commands lib/devrelay/service lib/devrelay/slip lib/devrelay/types
     lib/encoding
     components_pc/mongoose
+    components_pc/miniaudio
     components_pc/cJSON
     components_pc/libsmb2/include
     components_pc/libssh/include ${CMAKE_CURRENT_BINARY_DIR}/components_pc/libssh/include
@@ -162,16 +170,19 @@ set(SOURCES src/main.cpp
     lib/utils/U8Char.h lib/utils/U8Char.cpp
     lib/hardware/fnWiFi.h lib/hardware/fnDummyWiFi.h lib/hardware/fnDummyWiFi.cpp
     lib/hardware/led.h lib/hardware/led.cpp
-    lib/hardware/fnUART.h lib/hardware/fnUART.cpp
-    lib/hardware/fnUARTUnix.cpp lib/hardware/fnUARTWindows.cpp
+    lib/hardware/COMChannel.h lib/hardware/COMChannel.cpp
+    lib/hardware/IOChannel.h lib/hardware/IOChannel.cpp
+    lib/hardware/TTYChannel.h lib/hardware/TTYChannel.cpp
     lib/hardware/fnSystem.h lib/hardware/fnSystem.cpp lib/hardware/fnSystemNet.cpp
     lib/FileSystem/fnDirCache.h lib/FileSystem/fnDirCache.cpp
+    lib/FileSystem/fnFileCache.h lib/FileSystem/fnFileCache.cpp
     lib/FileSystem/fnFS.h lib/FileSystem/fnFS.cpp
     lib/FileSystem/fnFsSPIFFS.h lib/FileSystem/fnFsSPIFFS.cpp
     lib/FileSystem/fnFsSD.h lib/FileSystem/fnFsSD.cpp
     lib/FileSystem/fnFsTNFS.h lib/FileSystem/fnFsTNFS.cpp
     lib/FileSystem/fnFsSMB.h lib/FileSystem/fnFsSMB.cpp
     lib/FileSystem/fnFsFTP.h lib/FileSystem/fnFsFTP.cpp
+    lib/FileSystem/fnFsHTTP.h lib/FileSystem/fnFsHTTP.cpp
     lib/FileSystem/fnFile.h lib/FileSystem/fnFile.cpp
     lib/FileSystem/fnFileLocal.h lib/FileSystem/fnFileLocal.cpp
     lib/FileSystem/fnFileTNFS.h lib/FileSystem/fnFileTNFS.cpp
@@ -190,6 +201,7 @@ set(SOURCES src/main.cpp
     lib/fnjson/fnjson.h lib/fnjson/fnjson.cpp
     components_pc/mongoose/mongoose.h components_pc/mongoose/mongoose.c
     lib/webdav/WebDAV.h lib/webdav/WebDAV.cpp
+    lib/webdav/IndexParser.h lib/webdav/IndexParser.cpp
     lib/http/httpService.h lib/http/mgHttpService.cpp
     lib/http/httpServiceParser.h lib/http/httpServiceParser.cpp
     lib/http/httpServiceConfigurator.h lib/http/httpServiceConfigurator.cpp
@@ -231,7 +243,6 @@ set(SOURCES src/main.cpp
     lib/network-protocol/SMB.h lib/network-protocol/SMB.cpp
     lib/network-protocol/SSH.h lib/network-protocol/SSH.cpp
     lib/network-protocol/SD.h lib/network-protocol/SD.cpp
-    lib/fuji/fujiCmd.h
     lib/fuji/fujiHost.h lib/fuji/fujiHost.cpp
     lib/fuji/fujiDisk.h lib/fuji/fujiDisk.cpp
     lib/bus/bus.h
@@ -240,7 +251,7 @@ set(SOURCES src/main.cpp
     lib/device/printer.h
     lib/device/modem.h
     lib/device/cassette.h
-    lib/device/fuji.h
+    lib/device/fujiDevice.h
     lib/device/network.h
     lib/device/udpstream.h
     lib/device/siocpm.h
@@ -259,23 +270,20 @@ if(FUJINET_TARGET STREQUAL "ATARI")
     list(APPEND SOURCES
 
     lib/bus/sio/sio.h lib/bus/sio/sio.cpp
-    lib/bus/sio/siocom/sioport.h lib/bus/sio/siocom/sioport.cpp
-    lib/bus/sio/siocom/serialsio.h lib/bus/sio/siocom/serialsio.cpp
-    lib/bus/sio/siocom/netsio.h lib/bus/sio/siocom/netsio.cpp
-    lib/bus/sio/siocom/fnSioCom.h lib/bus/sio/siocom/fnSioCom.cpp
+    lib/bus/sio/NetSIO.h lib/bus/sio/NetSIO.cpp
     lib/media/atari/diskType.h lib/media/atari/diskType.cpp
     lib/media/atari/diskTypeAtr.h lib/media/atari/diskTypeAtr.cpp
-    lib/media/atari/diskTypeAtx.h
+    lib/media/atari/diskTypeAtx.h lib/media/atari/diskTypeAtx.cpp
     lib/media/atari/diskTypeXex.h lib/media/atari/diskTypeXex.cpp
 
     lib/device/sio/disk.h lib/device/sio/disk.cpp
     lib/device/sio/printer.h lib/device/sio/printer.cpp
     lib/device/sio/printerlist.h lib/device/sio/printerlist.cpp
     lib/device/sio/cassette.h lib/device/sio/cassette.cpp
-    lib/device/sio/fuji.h lib/device/sio/fuji.cpp
+    lib/device/sio/sioFuji.h lib/device/sio/sioFuji.cpp
     lib/device/sio/network.h lib/device/sio/network.cpp
     lib/device/sio/udpstream.h lib/device/sio/udpstream.cpp
-    #lib/device/sio/voice.h lib/device/sio/voice.cpp
+    lib/device/sio/voice.h lib/device/sio/voice.cpp
     lib/device/sio/clock.h lib/device/sio/clock.cpp
     lib/device/sio/siocpm.h lib/device/sio/siocpm.cpp
     lib/device/sio/pclink.h lib/device/sio/pclink.cpp
@@ -283,6 +291,18 @@ if(FUJINET_TARGET STREQUAL "ATARI")
 
     )
 endif()
+
+# support for SAM audio playback
+list(APPEND SOURCES
+    lib/sam/ReciterTabs.h
+    lib/sam/reciter.h lib/sam/reciter.c
+    lib/sam/RenderTabs.h
+    lib/sam/render.h lib/sam/render.c
+    lib/sam/SamTabs.h
+    lib/sam/sam.h lib/sam/sam.c
+    lib/sam/samdebug.h lib/sam/samdebug.c
+    lib/sam/samlib.h lib/sam/samlib.cpp
+)
 
 if(FUJINET_TARGET STREQUAL "APPLE")
     list(APPEND SOURCES
@@ -320,7 +340,7 @@ if(FUJINET_TARGET STREQUAL "APPLE")
     lib/device/iwm/printer.h lib/device/iwm/printer.cpp
     lib/device/iwm/printerlist.h lib/device/iwm/printerlist.cpp
     lib/device/iwm/modem.h lib/device/iwm/modem.cpp
-    lib/device/iwm/fuji.h lib/device/iwm/fuji.cpp
+    lib/device/iwm/iwmFuji.h lib/device/iwm/iwmFuji.cpp
     lib/device/iwm/network.h lib/device/iwm/network.cpp
     lib/device/iwm/clock.h lib/device/iwm/clock.cpp
     lib/device/iwm/cpm.h lib/device/iwm/cpm.cpp
@@ -345,21 +365,39 @@ if(FUJINET_TARGET STREQUAL "COCO")
     list(APPEND SOURCES
 
     lib/bus/drivewire/drivewire.h lib/bus/drivewire/drivewire.cpp
-    lib/bus/drivewire/dwcom/fnDwCom.h lib/bus/drivewire/dwcom/fnDwCom.cpp
-    lib/bus/drivewire/dwcom/dwport.h lib/bus/drivewire/dwcom/dwport.cpp
-    lib/bus/drivewire/dwcom/dwserial.h lib/bus/drivewire/dwcom/dwserial.cpp
-    lib/bus/drivewire/dwcom/dwbecker.h lib/bus/drivewire/dwcom/dwbecker.cpp
+    lib/bus/drivewire/BeckerSocket.h lib/bus/drivewire/BeckerSocket.cpp
 
     lib/media/drivewire/mediaType.h lib/media/drivewire/mediaType.cpp
     lib/media/drivewire/mediaTypeDSK.h lib/media/drivewire/mediaTypeDSK.cpp
     lib/media/drivewire/mediaTypeMRM.h lib/media/drivewire/mediaTypeMRM.cpp
+    lib/media/drivewire/mediaTypeVDK.h lib/media/drivewire/mediaTypeVDK.cpp
 
-    lib/device/drivewire/fuji.h lib/device/drivewire/fuji.cpp
+    lib/device/drivewire/drivewireFuji.h lib/device/drivewire/drivewireFuji.cpp
     lib/device/drivewire/network.h lib/device/drivewire/network.cpp
     lib/device/drivewire/dload.h lib/device/drivewire/dload.cpp
     lib/device/drivewire/disk.h lib/device/drivewire/disk.cpp
     lib/device/drivewire/printer.h lib/device/drivewire/printer.cpp
     lib/device/drivewire/printerlist.h lib/device/drivewire/printerlist.cpp
+
+    )
+endif()
+
+if(FUJINET_TARGET STREQUAL "RS232")
+    list(APPEND SOURCES
+
+    lib/bus/rs232/rs232.h lib/bus/rs232/rs232.cpp
+
+    lib/media/rs232/diskType.h lib/media/rs232/diskType.cpp
+    lib/media/rs232/diskTypeImg.h lib/media/rs232/diskTypeImg.cpp
+
+    lib/device/rs232/apetime.cpp lib/device/rs232/apetime.h
+    lib/device/rs232/disk.cpp lib/device/rs232/disk.h
+    lib/device/rs232/modem.cpp lib/device/rs232/modem.h
+    lib/device/rs232/network.cpp lib/device/rs232/network.h
+    lib/device/rs232/printer.cpp lib/device/rs232/printer.h
+    lib/device/rs232/printerlist.cpp lib/device/rs232/printerlist.h
+    lib/device/rs232/rs232Fuji.cpp lib/device/rs232/rs232Fuji.h
+    lib/device/rs232/rs232cpm.cpp lib/device/rs232/rs232cpm.h
 
     )
 endif()
@@ -376,6 +414,11 @@ else()
 endif()
 
 add_executable(fujinet ${SOURCES})
+
+# Explicitly link dl for Linux (needed for dlopen/dlsym/dlclose)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(fujinet dl)
+endif()
 
 # Libraries
 # build and link static libs

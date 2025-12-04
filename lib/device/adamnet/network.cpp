@@ -5,6 +5,7 @@
  */
 
 #include "network.h"
+#include "../network.h"
 
 #include <cstring>
 #include <algorithm>
@@ -14,19 +15,9 @@
 #include "utils.h"
 
 #include "status_error_codes.h"
-#include "TCP.h"
-#include "UDP.h"
-#include "Test.h"
-#include "Telnet.h"
-#include "TNFS.h"
-#include "FTP.h"
-#include "HTTP.h"
-#include "SSH.h"
-#include "SMB.h"
-
 #include "ProtocolParser.h"
 
-// using namespace std;
+using namespace std;
 
 /**
  * Constructor
@@ -82,7 +73,7 @@ void adamNetwork::get_error()
 
     Debug_printf("Get Error\n");
     adamnet_recv(); // CK
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
     response_len = 1;
 
@@ -114,7 +105,7 @@ void adamNetwork::open(unsigned short s)
     adamnet_recv_buffer(response, s);
     adamnet_recv(); // checksum
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     channelMode = PROTOCOL;
@@ -192,7 +183,7 @@ void adamNetwork::close()
 
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     statusByte.byte = 0x00;
@@ -255,7 +246,7 @@ void adamNetwork::write(uint16_t num_bytes)
     adamnet_recv_buffer(response, num_bytes);
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     *transmitBuffer += string((char *)response, num_bytes);
@@ -291,36 +282,37 @@ bool adamNetwork::adamnet_write_channel(unsigned short num_bytes)
  */
 void adamNetwork::status()
 {
-    NetworkStatus s;
+    NetworkStatus ns;
+    NDeviceStatus *status = (NDeviceStatus *) response;
     adamnet_recv(); // CK
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     if (protocol == nullptr)
     {
-        response[0] = 0;
-        response[1] = 0;
-        response[2] = 0;
-        response[3] = 165; // invalid spec.
-        response_len = 4;
+        status->avail = 0;
+        status->conn = 0;
+        status->err = 165; // invalid spec.
+        response_len = sizeof(*status);
         return;
     }
 
     switch (channelMode)
     {
     case PROTOCOL:
-        err = protocol->status(&s);
+        err = protocol->status(&ns);
         break;
     case JSON:
         // err = json.status(&status);
         break;
     }
 
-    response[0] = s.rxBytesWaiting & 0xFF;
-    response[1] = s.rxBytesWaiting >> 8;
-    response[2] = s.connected;
-    response[3] = s.error;
-    response_len = 4;
+    size_t avail = protocol->available();
+    avail = avail > 65535 ? 65535 : avail;
+    status->avail = avail;
+    status->conn = ns.connected;
+    status->err = ns.error;
+    response_len = sizeof(*status);
     receiveMode = STATUS;
 }
 
@@ -331,7 +323,7 @@ void adamNetwork::get_prefix()
 {
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     Debug_printf("adamNetwork::adamnet_getprefix(%s)\n", prefix.c_str());
@@ -352,7 +344,7 @@ void adamNetwork::set_prefix(unsigned short s)
     adamnet_recv_buffer(prefixSpec, s);
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     prefixSpec_str = string((const char *)prefixSpec);
@@ -414,7 +406,7 @@ void adamNetwork::set_login(uint16_t s)
     adamnet_recv_buffer(loginspec, s);
     adamnet_recv(); // ck
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     login = string((char *)loginspec, s);
@@ -432,7 +424,7 @@ void adamNetwork::set_password(uint16_t s)
     adamnet_recv_buffer(passwordspec, s);
     adamnet_recv(); // ck
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     password = string((char *)passwordspec, s);
@@ -446,7 +438,7 @@ void adamNetwork::del(uint16_t s)
     adamnet_recv_buffer(response, s);
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     d = string((char *)response, s);
@@ -475,7 +467,7 @@ void adamNetwork::rename(uint16_t s)
     adamnet_recv_buffer(response, s);
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     d = string((char *)response, s);
@@ -501,7 +493,7 @@ void adamNetwork::mkdir(uint16_t s)
     adamnet_recv_buffer(response, s);
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     d = string((char *)response, s);
@@ -528,16 +520,16 @@ void adamNetwork::channel_mode()
     {
     case 0:
         channelMode = PROTOCOL;
-        AdamNet.start_time = esp_timer_get_time();
+        SYSTEM_BUS.start_time = esp_timer_get_time();
         adamnet_response_ack();
         break;
     case 1:
         channelMode = JSON;
-        AdamNet.start_time = esp_timer_get_time();
+        SYSTEM_BUS.start_time = esp_timer_get_time();
         adamnet_response_ack();
         break;
     default:
-        AdamNet.start_time = esp_timer_get_time();
+        SYSTEM_BUS.start_time = esp_timer_get_time();
         adamnet_response_nack();
         break;
     }
@@ -555,7 +547,7 @@ void adamNetwork::json_query(unsigned short s)
     adamnet_recv_buffer(response, s);
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     json.setReadQuery(std::string((char *)response, s), cmdFrame.aux2);
@@ -566,7 +558,7 @@ void adamNetwork::json_query(unsigned short s)
 void adamNetwork::json_parse()
 {
     adamnet_recv(); // CK
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
     json.parse();
     memset(response, 0, sizeof(response));
@@ -583,7 +575,7 @@ void adamNetwork::adamnet_special_inquiry()
 {
 }
 
-void adamNetwork::do_inquiry(unsigned char inq_cmd)
+void adamNetwork::do_inquiry(fujiCommandID_t inq_cmd)
 {
     // Reset inq_dstats
     inq_dstats = 0xff;
@@ -599,30 +591,30 @@ void adamNetwork::do_inquiry(unsigned char inq_cmd)
     {
         switch (inq_cmd)
         {
-        case 0x20:
-        case 0x21:
-        case 0x23:
-        case 0x24:
-        case 0x2A:
-        case 0x2B:
-        case 0x2C:
-        case 0xFD:
-        case 0xFE:
+        case FUJICMD_RENAME:
+        case FUJICMD_DELETE:
+        case FUJICMD_LOCK:
+        case FUJICMD_UNLOCK:
+        case FUJICMD_MKDIR:
+        case FUJICMD_RMDIR:
+        case FUJICMD_CHDIR:
+        case FUJICMD_SCAN_NETWORKS:
+        case FUJICMD_GET_SSID:
             inq_dstats = 0x80;
             break;
-        case 0x30:
+        case FUJICMD_GETCWD:
             inq_dstats = 0x40;
             break;
-        case 'Z': // Set interrupt rate
+        case FUJICMD_TIMER: // Set interrupt rate
             inq_dstats = 0x00;
             break;
-        case 'T': // Set Translation
+        case FUJICMD_TRANSLATION:
             inq_dstats = 0x00;
             break;
-        case 0x80: // JSON Parse
+        case FUJICMD_JSON_PARSE:
             inq_dstats = 0x00;
             break;
-        case 0x81: // JSON Query
+        case FUJICMD_JSON_QUERY:
             inq_dstats = 0x80;
             break;
         default:
@@ -646,7 +638,7 @@ void adamNetwork::adamnet_special_00(unsigned short s)
 
     adamnet_recv(); // CK
 
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
     adamnet_response_ack();
 
     protocol->special_00(&cmdFrame);
@@ -720,7 +712,7 @@ void adamNetwork::adamnet_response_status()
         protocol->status(&s);
 
     statusByte.bits.client_connected = s.connected == true;
-    statusByte.bits.client_data_available = s.rxBytesWaiting > 0;
+    statusByte.bits.client_data_available = protocol->available() > 0;
     statusByte.bits.client_error = s.error > 1;
 
     status_response[1] = 2; // max packet size 1026 bytes, maybe larger?
@@ -728,7 +720,7 @@ void adamNetwork::adamnet_response_status()
 
     status_response[4] = statusByte.byte;
 
-    int64_t t = esp_timer_get_time() - AdamNet.start_time;
+    int64_t t = esp_timer_get_time() - SYSTEM_BUS.start_time;
 
     if (t < 300)
         virtualDevice::adamnet_response_status();
@@ -741,49 +733,49 @@ void adamNetwork::adamnet_control_ack()
 void adamNetwork::adamnet_control_send()
 {
     uint16_t s = adamnet_recv_length(); // receive length
-    uint8_t c = adamnet_recv();         // receive command
+    fujiCommandID_t c = (fujiCommandID_t) adamnet_recv();         // receive command
 
     s--; // Because we've popped the command off the stack
 
     switch (c)
     {
-    case ' ':
+    case FUJICMD_RENAME:
         rename(s);
         break;
-    case '!':
+    case FUJICMD_DELETE:
         del(s);
         break;
-    case '*':
+    case FUJICMD_MKDIR:
         mkdir(s);
         break;
-    case ',':
+    case FUJICMD_CHDIR:
         set_prefix(s);
         break;
-    case '0':
+    case FUJICMD_GETCWD:
         get_prefix();
         break;
-    case 'E':
+    case FUJICMD_GET_ERROR:
         get_error();
         break;
-    case 'O':
+    case FUJICMD_OPEN:
         open(s);
         break;
-    case 'C':
+    case FUJICMD_CLOSE:
         close();
         break;
-    case 'S':
+    case FUJICMD_STATUS:
         status();
         break;
-    case 'W':
+    case FUJICMD_WRITE:
         write(s);
         break;
-    case 0xFC:
+    case FUJICMD_JSON:
         channel_mode();
         break;
-    case 0xFD: // login
+    case FUJICMD_USERNAME: // login
         set_login(s);
         break;
-    case 0xFE: // password
+    case FUJICMD_PASSWORD: // password
         set_password(s);
         break;
     default:
@@ -805,11 +797,13 @@ void adamNetwork::adamnet_control_send()
         case JSON:
             switch (c)
             {
-            case 'P':
+            case FUJICMD_PARSE:
                 json_parse();
                 break;
-            case 'Q':
+            case FUJICMD_QUERY:
                 json_query(s);
+                break;
+            default:
                 break;
             }
             break;
@@ -844,7 +838,7 @@ void adamNetwork::adamnet_control_receive_channel_json()
     }
     else
     {
-        AdamNet.start_time = esp_timer_get_time();
+        SYSTEM_BUS.start_time = esp_timer_get_time();
         if (response_len > 0)
             adamnet_response_ack();
         else
@@ -864,22 +858,23 @@ inline void adamNetwork::adamnet_control_receive_channel_protocol()
 
     // Get status
     protocol->status(&ns);
+    size_t avail = protocol->available();
 
-    if (!ns.rxBytesWaiting)
+    if (!avail)
     {
-        AdamNet.start_time = esp_timer_get_time();
+        SYSTEM_BUS.start_time = esp_timer_get_time();
         adamnet_response_nack(true);
         return;
     }
     else
     {
-        AdamNet.start_time = esp_timer_get_time();
+        SYSTEM_BUS.start_time = esp_timer_get_time();
         adamnet_response_ack(true);
     }
 
     // Truncate bytes waiting to response size
-    ns.rxBytesWaiting = (ns.rxBytesWaiting > 1024) ? 1024 : ns.rxBytesWaiting;
-    response_len = ns.rxBytesWaiting;
+    avail = avail > 1024 ? 1024 : avail;
+    response_len = avail;
 
     if (protocol->read(response_len)) // protocol adapter returned error
     {
@@ -899,7 +894,7 @@ inline void adamNetwork::adamnet_control_receive_channel_protocol()
 
 inline void adamNetwork::adamnet_control_receive()
 {
-    AdamNet.start_time = esp_timer_get_time();
+    SYSTEM_BUS.start_time = esp_timer_get_time();
 
     // Data is waiting, go ahead and send it off.
     if (response_len > 0)

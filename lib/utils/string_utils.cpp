@@ -1,3 +1,20 @@
+// Meatloaf - A Commodore 64/128 multi-device emulator
+// https://github.com/idolpx/meatloaf
+// Copyright(C) 2020 James Johnston
+//
+// Meatloaf is free software : you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Meatloaf is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Meatloaf. If not, see <http://www.gnu.org/licenses/>.
+
 #include "string_utils.h"
 
 #include <algorithm>
@@ -6,7 +23,12 @@
 #include <cmath>
 #include <sstream>
 #include <iomanip>
+#include <mbedtls/version.h>
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include <psa/crypto.h>
+#else /* MBEDTLS_VERSION_MAJOR < 4 */
 #include <mbedtls/sha1.h>
+#endif /* MBEDTLS_VERSION_MAJOR >= 4 */
 #include <mbedtls/base64.h>
 
 //#include "../../include/petscii.h"
@@ -25,8 +47,8 @@ void copyString(const std::string& input, char *dst, size_t dst_size)
     dst[dst_size - 1] = '\0';
 }
 
-constexpr unsigned int hash(const char *s, int off = 0) {                        
-    return !s[off] ? 5381 : (hash(s, off+1)*33) ^ s[off];                           
+constexpr unsigned int hash(const char *s, int off = 0) {
+    return !s[off] ? 5381 : (hash(s, off+1)*33) ^ s[off];
 }
 
 namespace mstr {
@@ -45,7 +67,7 @@ namespace mstr {
         // CR
         s.erase(
             std::find_if(s.rbegin(), s.rend(), [](int ch) { return (ch != 0x0D); }).base(), s.end());
-        
+
         // SPACE
         s.erase(
             std::find_if(s.rbegin(), s.rend(), [](int ch) { return !std::isspace(ch); }).base(), s.end());
@@ -91,7 +113,7 @@ namespace mstr {
             if (contains(s, it->c_str()))
                 return true;
         }
-        
+
         return false;
     }
 
@@ -144,7 +166,7 @@ namespace mstr {
     /*
     * String Comparision
     */
-    bool compare_char(char &c1, char &c2)
+    bool compare_char(const char &c1, const char &c2)
     {
         if (c1 == c2)
             return true;
@@ -152,7 +174,7 @@ namespace mstr {
         return false;
     }
 
-    bool compare_char_insensitive(char &c1, char &c2)
+    bool compare_char_insensitive(const char &c1, const char &c2)
     {
         if (c1 == c2)
             return true;
@@ -191,7 +213,7 @@ namespace mstr {
     }
 
 
-    bool equals(std::string &s1, char *s2, bool case_sensitive)
+    bool equals(std::string &s1, const char *s2, bool case_sensitive)
     {
         if(case_sensitive)
             return ( (s1.size() == strlen(s2) ) &&
@@ -200,7 +222,7 @@ namespace mstr {
             return ( (s1.size() == strlen(s2) ) &&
                 std::equal(s1.begin(), s1.end(), s2, &compare_char_insensitive) );
     }
-    
+
     bool contains(std::string &s1, const char *s2, bool case_sensitive)
     {
         std::string sn = s2;
@@ -211,6 +233,12 @@ namespace mstr {
             it = ( std::search(s1.begin(), s1.end(), sn.begin(), sn.end(), &compare_char_insensitive) );
 
         return ( it != s1.end() );
+    }
+
+    bool contains(const char *s1, const char *s2, bool case_sensitive)
+    {
+        std::string ss1 = s1;
+        return contains(ss1, s2, case_sensitive);
     }
 
     bool compare(std::string &s1, std::string &s2, bool case_sensitive)
@@ -318,7 +346,7 @@ namespace mstr {
 
     bool isHex(std::string &s)
     {
-        return std::all_of(s.begin(), s.end(), 
+        return std::all_of(s.begin(), s.end(),
                         [](unsigned char c) { return ::isxdigit(c); });
     }
 
@@ -329,7 +357,7 @@ namespace mstr {
                     [](unsigned char c) { return (c == 0xa0) ? 0x20: c; });
     }
 
-    bool isText(std::string &s) 
+    bool isText(std::string &s)
     {
         // extensions
         if(equals(s, (char*)"txt", false))
@@ -356,11 +384,17 @@ namespace mstr {
 
     bool isNumeric(std::string &s)
     {
-        return std::all_of(s.begin(), s.end(), 
+        return std::all_of(s.begin(), s.end(),
                         [](unsigned char c) { return ::isdigit(c); });
     }
 
-    void replaceAll(std::string &s, const std::string &search, const std::string &replace) 
+    bool isNumeric(char *s)
+    {
+        std::string s2 = s;
+        return isNumeric(s2);
+    }
+
+    void replaceAll(std::string &s, const std::string &search, const std::string &replace)
     {
         const size_t size = search.size();
         bool size_match = ( size == replace.size() );
@@ -413,9 +447,9 @@ namespace mstr {
             //Debug_printv("start >= end");
             return std::string();
         }
-            
 
-        for(auto i = (*start); i<(*end); i++) 
+
+        for(auto i = (*start); i<(*end); i++)
         {
             //Debug_printv("b %d res [%s]", i, res.c_str());
             res+=(*i);
@@ -426,7 +460,11 @@ namespace mstr {
         }
         //Debug_printv("res[%s] length[%d] size[%d]", res.c_str(), res.length(), res.size());
 
-        return res.erase(res.length()-1,1);
+        //Debug_printv("res[%s] length[%d] size[%d]", res.c_str(), res.length(), res.size());
+        if ( res.length() > 1)
+            res.erase(res.length()-1);
+
+        return res;
     }
 
     std::string joinToString(std::vector<std::string> strings, std::string separator) {
@@ -479,9 +517,9 @@ namespace mstr {
             {
                 s[ii++] = ' ';
                 i++;
-            } 
-            else if ((s[i] == '%') && 
-                    isxdigit(s[i + 1]) && 
+            }
+            else if ((s[i] == '%') &&
+                    isxdigit(s[i + 1]) &&
                     isxdigit(s[i + 2]) &&
                     (i + 2 < size))
             {
@@ -521,10 +559,55 @@ namespace mstr {
     std::string sha1(const std::string &s)
     {
         unsigned char hash[21] = { 0x00 };
-        mbedtls_sha1((const unsigned char *)s.c_str(), s.length(), hash);
-        // unsigned char output[64];
-        // size_t outlen;
-        // mbedtls_base64_encode(output, 64, &outlen, hash, 20);
+
+#if MBEDTLS_VERSION_MAJOR >= 4
+    psa_status_t status = psa_crypto_init();
+    if (status != PSA_SUCCESS)
+    {
+        Debug_printf("psa_crypto_init failed with status %d\n", status);
+        return "";
+    }
+
+    size_t hash_length;
+    std::vector<uint8_t> psa_hash_output(PSA_HASH_LENGTH(PSA_ALG_SHA_1));
+
+    status = psa_hash_compute(
+        PSA_ALG_SHA_1,
+        (const unsigned char *)s.c_str(),
+        s.length(),
+        psa_hash_output.data(),
+        psa_hash_output.size(),
+        &hash_length
+    );
+
+    if (status != PSA_SUCCESS)
+    {
+        Debug_printf("psa_hash_compute failed with status %d\n", status);
+        return "";
+    }
+
+    if (hash_length != 20)
+    {
+        Debug_printf("Unexpected hash length %zu\n", hash_length);
+        return "";
+    }
+
+    memcpy(hash, psa_hash_output.data(), 20);
+#elif MBEDTLS_VERSION_NUMBER >= 0x02070000 && MBEDTLS_VERSION_NUMBER < 0x03000000
+        // Use the newer mbedtls API
+        int ret = mbedtls_sha1_ret((const unsigned char *)s.c_str(), s.length(), hash);
+        if (ret != 0) {
+            Debug_printf("mbedtls_sha1 failed with error code %d\n", ret);
+            return "";
+        }
+#else
+        // Use the legacy mbedtls API
+        int ret = mbedtls_sha1((const unsigned char *)s.c_str(), s.length(), hash);
+        if (ret != 0) {
+            Debug_printf("mbedtls_sha1 failed with error code %d\n", ret);
+            return "";
+        }
+#endif
         std::string o(reinterpret_cast< char const* >(hash));
         return toHex(o);
     }
@@ -554,7 +637,7 @@ namespace mstr {
 
         //Debug_printv("bytes[%llu]", size);
         do
-        {          
+        {
             n = size / std::pow(1024, ++i);
             //Debug_printv("i[%d] n[%llu]", i, n);
         }
@@ -565,7 +648,7 @@ namespace mstr {
     }
 
 
-    void cd( std::string &path, std::string newDir) 
+    void cd( std::string &path, std::string newDir)
     {
         //Debug_printv("cd requested: [%s]", newDir.c_str());
 
@@ -643,7 +726,7 @@ namespace mstr {
     }
 
 
-    std::string parent(std::string path, std::string plus) 
+    std::string parent(std::string path, std::string plus)
     {
         //Debug_printv("url[%s] path[%s]", url.c_str(), path.c_str());
 
@@ -665,19 +748,19 @@ namespace mstr {
         }
     }
 
-    std::string localParent(std::string path, std::string plus) 
+    std::string localParent(std::string path, std::string plus)
     {
         //Debug_printv("url[%s] path[%s]", url.c_str(), path.c_str());
         // drop last dir
-        // check if it isn't shorter than streamFile
+        // check if it isn't shorter than sourceFile
         // add plus
         int lastSlash = path.find_last_of('/');
         if ( lastSlash == path.size() - 1 ) {
             lastSlash = path.find_last_of('/', path.size() - 2);
         }
         std::string parent = mstr::dropLast(path, path.size() - lastSlash);
-        // if(parent.length()-streamFile->url.length()>1)
-        //     parent = streamFile->url;
+        // if(parent.length()-sourceFile->url.length()>1)
+        //     parent = sourceFile->url;
         return parent + "/" + plus;
     }
 

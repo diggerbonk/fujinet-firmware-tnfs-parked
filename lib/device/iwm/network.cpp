@@ -5,6 +5,7 @@
  */
 
 #include "network.h"
+#include "../network.h"
 
 #include <cstring>
 #include <ctype.h>
@@ -18,20 +19,8 @@
 
 #include "status_error_codes.h"
 #include "NetworkProtocolFactory.h"
-#include "network_data.h"
-#include "TCP.h"
-#include "UDP.h"
-#include "Test.h"
-#include "Telnet.h"
-#include "TNFS.h"
-#include "FTP.h"
-#include "HTTP.h"
-#include "SSH.h"
-#include "SMB.h"
 
-#include "ProtocolParser.h"
-
-// using namespace std;
+using namespace std;
 
 /**
  * Constructor
@@ -64,7 +53,7 @@ void iwmNetwork::send_status_reply_packet()
     data[1] = 0; // block size 1
     data[2] = 0; // block size 2
     data[3] = 0; // block size 3
-    IWM.iwm_send_packet(id(), iwm_packet_type_t::status, SP_ERR_NOERROR, data, 4);
+    SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::status, SP_ERR_NOERROR, data, 4);
 }
 
 void iwmNetwork::send_status_dib_reply_packet()
@@ -77,7 +66,7 @@ void iwmNetwork::send_status_dib_reply_packet()
         { SP_TYPE_BYTE_FUJINET_NETWORK, SP_SUBTYPE_BYTE_FUJINET_NETWORK },  // type, subtype
         { 0x00, 0x01 }                                                      // version.
     );
-    IWM.iwm_send_packet(id(), iwm_packet_type_t::status, SP_ERR_NOERROR, data.data(), data.size());
+    SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::status, SP_ERR_NOERROR, data.data(), data.size());
 }
 
 /**
@@ -167,7 +156,7 @@ void iwmNetwork::close()
     current_network_data.receiveBuffer.clear();
     current_network_data.transmitBuffer.clear();
     current_network_data.specialBuffer.clear();
-    
+
 
     // technically not required as removing the item from the map will also remove the value
     if (current_network_data.protocol) current_network_data.protocol.reset();
@@ -359,7 +348,7 @@ void iwmNetwork::iwmnet_special_inquiry()
 {
 }
 
-void iwmNetwork::do_inquiry(unsigned char inq_cmd)
+void iwmNetwork::do_inquiry(fujiCommandID_t inq_cmd)
 {
     auto& current_network_data = network_data_map[current_network_unit];
     // Reset inq_dstats
@@ -441,7 +430,7 @@ void iwmNetwork::special_40()
     {
         data_len = 256;
         //send_data_packet(data_len);
-        IWM.iwm_send_packet(id(), iwm_packet_type_t::data, 0, data_buffer, data_len);
+        SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::data, 0, data_buffer, data_len);
     }
     else
     {
@@ -494,6 +483,8 @@ void iwmNetwork::status()
 {
     auto& current_network_data = network_data_map[current_network_unit];
     NetworkStatus s;
+    size_t avail = 0;
+    NDeviceStatus *status;
 
     switch (current_network_data.channelMode)
     {
@@ -504,23 +495,23 @@ void iwmNetwork::status()
             s.error = NETWORK_ERROR_INVALID_COMMAND;
         } else {
             err = current_network_data.protocol->status(&s);
+            avail = current_network_data.protocol->available();
         }
         break;
     case NetworkData::JSON:
         err = (current_network_data.json->status(&s) == false) ? 0 : NETWORK_ERROR_GENERAL;
+        avail = current_network_data.json->available();
         break;
     }
 
-    Debug_printf("Bytes Waiting: 0x%02x, Connected: %u, Error: %u\n", s.rxBytesWaiting, s.connected, s.error);
+    Debug_printf("Bytes Waiting: 0x%02x, Connected: %u, Error: %u\n", avail, s.connected, s.error);
 
-    if (s.rxBytesWaiting > 512)
-        s.rxBytesWaiting = 512;
-    
-    data_buffer[0] = s.rxBytesWaiting & 0xFF;
-    data_buffer[1] = s.rxBytesWaiting >> 8;
-    data_buffer[2] = s.connected;
-    data_buffer[3] = s.error;
-    data_len = 4;
+    avail = std::min((size_t) 512, avail);
+    status = (NDeviceStatus *) data_buffer;
+    status->avail = avail;
+    status->conn = s.connected;
+    status->err = s.error;
+    data_len = sizeof(*status);
 }
 
 void iwmNetwork::iwm_status(iwm_decoded_cmd_t cmd)
@@ -554,20 +545,20 @@ void iwmNetwork::iwm_status(iwm_decoded_cmd_t cmd)
         send_status_dib_reply_packet();
         return;
         break;
-    case '0':
+    case FUJICMD_GETCWD:
         get_prefix();
         break;
-    case 'R':
+    case FUJICMD_READ:
         net_read();
         break;
-    case 'S':
+    case FUJICMD_STATUS:
         status();
         break;
     }
 
     Debug_printf("\r\nStatus code complete, sending response");
     //send_data_packet(data_len);
-    IWM.iwm_send_packet(id(), iwm_packet_type_t::data, 0, data_buffer, data_len);
+    SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::data, 0, data_buffer, data_len);
     data_len = 0;
     memset(data_buffer, 0, sizeof(data_buffer));
 }
@@ -579,16 +570,15 @@ void iwmNetwork::net_read()
 bool iwmNetwork::read_channel_json(unsigned short num_bytes, iwm_decoded_cmd_t cmd)
 {
     auto& current_network_data = network_data_map[current_network_unit];
-    Debug_printf("read_channel_json - num_bytes: %02x, json_bytes_remaining: %02x\n", num_bytes, current_network_data.json->json_bytes_remaining);
-    if (current_network_data.json->json_bytes_remaining == 0) // if no bytes, we just return with no data
+    Debug_printf("read_channel_json - num_bytes: %02x, json_bytes_remaining: %02x\n", num_bytes, current_network_data.json->available());
+    if (current_network_data.json->available() == 0) // if no bytes, we just return with no data
     {
         data_len = 0;
     }
-    else if (num_bytes > current_network_data.json->json_bytes_remaining)
+    else if (num_bytes > current_network_data.json->available())
     {
         data_len = current_network_data.json->readValueLen();
         current_network_data.json->readValue(data_buffer, data_len);
-        current_network_data.json->json_bytes_remaining -= data_len;
 
         // Debug_printf("read_channel_json(1) - data_len: %02x, json_bytes_remaining: %02x\n", data_len, current_network_data.json->json_bytes_remaining);
         // int print_len = data_len;
@@ -601,8 +591,6 @@ bool iwmNetwork::read_channel_json(unsigned short num_bytes, iwm_decoded_cmd_t c
     }
     else
     {
-        current_network_data.json->json_bytes_remaining -= num_bytes;
-
         current_network_data.json->readValue(data_buffer, num_bytes);
         data_len = current_network_data.json->readValueLen();
 
@@ -622,30 +610,21 @@ bool iwmNetwork::read_channel_json(unsigned short num_bytes, iwm_decoded_cmd_t c
 bool iwmNetwork::read_channel(unsigned short num_bytes, iwm_decoded_cmd_t cmd)
 {
     NetworkStatus ns;
+    size_t avail;
     auto& current_network_data = network_data_map[current_network_unit];
 
     if (!current_network_data.protocol)
         return true; // Punch out.
 
+#ifdef UNUSED
     // Get status
     current_network_data.protocol->status(&ns);
+    avail = ns.rxBytesWaiting;
+#else
+    avail = current_network_data.protocol->available();
+#endif /* UNUSED */
 
-    if (ns.rxBytesWaiting == 0) // if no bytes, we just return with no data
-    {
-        data_len = 0;
-    }
-    else if (num_bytes < ns.rxBytesWaiting && num_bytes <= 512)
-    {
-        data_len = num_bytes;
-    }
-    else if (num_bytes > 512)
-    {
-        data_len = 512;
-    }
-    else
-    {
-        data_len = ns.rxBytesWaiting;
-    }
+    data_len = std::min((size_t) num_bytes, std::min((size_t) 512, avail));
 
     //Debug_printf("\r\nAvailable bytes %04x\n", data_len);
 
@@ -713,7 +692,7 @@ void iwmNetwork::iwm_read(iwm_decoded_cmd_t cmd)
     else
     {
         Debug_printf("\r\nsending Network read data packet (%04x bytes)...", data_len);
-        IWM.iwm_send_packet(id(), iwm_packet_type_t::data, 0, data_buffer, data_len);
+        SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::data, 0, data_buffer, data_len);
         data_len = 0;
         memset(data_buffer, 0, sizeof(data_buffer));
     }
@@ -745,7 +724,7 @@ void iwmNetwork::iwm_write(iwm_decoded_cmd_t cmd)
     auto& current_network_data = network_data_map[current_network_unit];
 
     // get write data packet, keep trying until no timeout
-    IWM.iwm_decode_data_packet((unsigned char *)data_buffer, data_len);
+    SYSTEM_BUS.iwm_decode_data_packet((unsigned char *)data_buffer, data_len);
 
     if (data_len == -1)
         iwm_return_ioerror();
@@ -770,7 +749,7 @@ void iwmNetwork::iwm_ctrl(iwm_decoded_cmd_t cmd)
 {
     uint8_t err_result = SP_ERR_NOERROR;
 
-    uint8_t control_code = get_status_code(cmd);
+    fujiCommandID_t control_code = (fujiCommandID_t) get_status_code(cmd);
 
     // fujinet-lib (with unit-id support) sends the count of bytes for a control as 4 to cater for the network unit.
     // Older code sends 3 as the count, so we can detect if the network unit byte is there or not.
@@ -787,48 +766,48 @@ void iwmNetwork::iwm_ctrl(iwm_decoded_cmd_t cmd)
 
     auto& current_network_data = network_data_map[current_network_unit];
 
-    IWM.iwm_decode_data_packet((uint8_t *)data_buffer, data_len);
+    SYSTEM_BUS.iwm_decode_data_packet((uint8_t *)data_buffer, data_len);
     print_packet((uint8_t *)data_buffer);
 
     // Debug_printv("cmd (looking for network_unit in byte 6, i.e. hex[5]):\r\n%s\r\n", mstr::toHex(cmd.decoded, 9).c_str());
 
-    if (control_code != 'O' && current_network_data.json == nullptr) {
+    if (control_code != FUJICMD_OPEN && current_network_data.json == nullptr) {
         Debug_printv("control should not be called on a non-open channel - FN was probably reset");
     }
 
     switch (control_code)
     {
-    case ' ':
+    case FUJICMD_RENAME:
         rename();
         break;
-    case '!':
+    case FUJICMD_DELETE:
         del();
         break;
-    case '*':
+    case FUJICMD_MKDIR:
         mkdir();
         break;
-    case ',':
+    case FUJICMD_CHDIR:
         set_prefix();
         break;
-    case '0':
+    case FUJICMD_GETCWD:
         get_prefix();
         break;
-    case 'O':
+    case FUJICMD_OPEN:
         open();
         break;
-    case 'C':
+    case FUJICMD_CLOSE:
         close();
         break;
-    case 'W':
+    case FUJICMD_WRITE:
         net_write();
         break;
-    case 0xFC:
+    case FUJICMD_JSON:
         channel_mode();
         break;
-    case 0xFD: // login
+    case FUJICMD_USERNAME: // login
         set_login();
         break;
-    case 0xFE: // password
+    case FUJICMD_PASSWORD: // password
         set_password();
         break;
     default:
@@ -856,11 +835,13 @@ void iwmNetwork::iwm_ctrl(iwm_decoded_cmd_t cmd)
             } else {
                 switch (control_code)
                 {
-                case 'P':
+                case FUJICMD_PARSE:
                     json_parse();
                     break;
-                case 'Q':
+                case FUJICMD_QUERY:
                     json_query(cmd);
+                    break;
+                default:
                     break;
                 }
             }

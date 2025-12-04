@@ -2,11 +2,12 @@
 
 #include "compat_string.h"
 
-#include "fuji.h"
+#include "fujiDevice.h"
 #include "fnFsSD.h"
 #include "fnFsTNFS.h"
 #include "fnFsSMB.h"
 #include "fnFsFTP.h"
+#include "fnFsHTTP.h"
 #include "fnTaskManager.h"
 #include "fnConfig.h"
 #include "fnio.h"
@@ -88,7 +89,7 @@ int fnHttpServiceBrowser::browse_url_encode(const char *src, size_t src_len, cha
     for (i = j = 0; i < src_len && j + 1 < dst_len; i++, j++)
     {
         if ((src[i] < 'A' || src[i] > 'Z') &&
-            (src[i] < 'a' || src[i] > 'z') && 
+            (src[i] < 'a' || src[i] > 'z') &&
             (src[i] < '0' || src[i] > '9') &&
             src[i] != '-' && src[i] != '.' && src[i] != '_' && src[i] != '~')
         {
@@ -101,7 +102,7 @@ int fnHttpServiceBrowser::browse_url_encode(const char *src, size_t src_len, cha
             {
                 return -1;
             }
-        } else 
+        } else
         {
             dst[j] = src[i];
         }
@@ -130,7 +131,7 @@ int fnHttpServiceBrowser::browse_html_escape(const char *src, size_t src_len, ch
             {
                 return -1;
             }
-        } else 
+        } else
         {
             dst[j] = src[i];
         }
@@ -225,21 +226,21 @@ int fnHttpServiceBrowser::browse_listdir(mg_connection *c, mg_http_message *hm, 
 
 #ifdef BUILD_ATARI // OS
                 // umount current image, if any - close image file, reset drive slot
-                theFuji.sio_disk_image_umount(false, drive_slot);
+                theFuji->sio_disk_image_umount(false, drive_slot);
 #endif
 
                 // update drive slot
-                fujiDisk &fnDisk = *theFuji.get_disks(drive_slot);
+                fujiDisk &fnDisk = *theFuji->get_disk(drive_slot);
                 fnDisk.host_slot = slot;
                 fnDisk.access_mode = (mount_mode == fnConfig::MOUNTMODE_WRITE) ? DISK_ACCESS_MODE_WRITE : DISK_ACCESS_MODE_READ;
                 strlcpy(fnDisk.filename, path, sizeof(fnDisk.filename));
 
 #ifdef BUILD_ATARI // OS
                 // mount host (file system)
-                if (theFuji.sio_mount_host(false, slot) == 0)
+                if (theFuji->sio_mount_host(false, slot) == 0)
                 {
                     // mount disk image
-                    theFuji.sio_disk_image_mount(false, drive_slot);
+                    theFuji->sio_disk_image_mount(false, drive_slot);
                 }
 #endif
             }
@@ -250,10 +251,10 @@ int fnHttpServiceBrowser::browse_listdir(mg_connection *c, mg_http_message *hm, 
             {
 #ifdef BUILD_ATARI // OS
                 // mount host (file system)
-                if (theFuji.sio_mount_host(false, theFuji.get_disks(drive_slot)->host_slot) == 0)
+                if (theFuji->sio_mount_host(false, theFuji->get_disk(drive_slot)->host_slot) == 0)
                 {
                     // mount disk image
-                    theFuji.sio_disk_image_mount(false, drive_slot);
+                    theFuji->sio_disk_image_mount(false, drive_slot);
                 }
 #endif
             }
@@ -266,25 +267,25 @@ int fnHttpServiceBrowser::browse_listdir(mg_connection *c, mg_http_message *hm, 
                 Config.clear_mount(drive_slot);
                 Config.save();
 #ifdef BUILD_ATARI // OS
-                theFuji.sio_disk_image_umount(false, drive_slot);
+                theFuji->sio_disk_image_umount(false, drive_slot);
 #endif
                 // Finally, scan all device slots, if all empty, and config enabled, enable the config device.
                 if (Config.get_general_config_enabled())
                 {
-                    if ((theFuji.get_disks(0)->host_slot == 0xFF) &&
-                        (theFuji.get_disks(1)->host_slot == 0xFF) &&
-                        (theFuji.get_disks(2)->host_slot == 0xFF) &&
-                        (theFuji.get_disks(3)->host_slot == 0xFF) &&
-                        (theFuji.get_disks(4)->host_slot == 0xFF) &&
-                        (theFuji.get_disks(5)->host_slot == 0xFF) &&
-                        (theFuji.get_disks(6)->host_slot == 0xFF) &&
-                        (theFuji.get_disks(7)->host_slot == 0xFF))
+                    if ((theFuji->get_disk(0)->host_slot == 0xFF) &&
+                        (theFuji->get_disk(1)->host_slot == 0xFF) &&
+                        (theFuji->get_disk(2)->host_slot == 0xFF) &&
+                        (theFuji->get_disk(3)->host_slot == 0xFF) &&
+                        (theFuji->get_disk(4)->host_slot == 0xFF) &&
+                        (theFuji->get_disk(5)->host_slot == 0xFF) &&
+                        (theFuji->get_disk(6)->host_slot == 0xFF) &&
+                        (theFuji->get_disk(7)->host_slot == 0xFF))
                     {
-                        theFuji.boot_config = true;
+                        theFuji->boot_config = true;
             #ifdef BUILD_ATARI
-                        theFuji.status_wait_count = 5;
+                        theFuji->status_wait_count = 5;
             #endif
-                        theFuji.device_active = true;
+                        theFuji->device_active = true;
                     }
                 }
             }
@@ -323,7 +324,7 @@ int fnHttpServiceBrowser::browse_listdir(mg_connection *c, mg_http_message *hm, 
         c,
         "<table cellpadding=\"0\"><thead>"
         "<tr><th>Size</th><th>Modified</th><th>Name</th></tr>"
-        "<tr><td colspan=\"3\"><hr></td></tr></thead><tbody>");
+        "<tr><td colspan=\"3\"><hr></td></tr></thead><tbody>\r\n");
 
     // list directory
     fsdir_entry *dp;
@@ -355,7 +356,7 @@ int fnHttpServiceBrowser::browse_listdrives(mg_connection *c, int slot, const ch
         c,
         "<table cellpadding=\"0\"><thead>"
         "<tr><th>Slot</th><th>Action</th><th>Current disk image (Mode)</th></tr>"
-        "<tr><td colspan=\"3\"><hr></td></tr></thead><tbody>");
+        "<tr><td colspan=\"3\"><hr></td></tr></thead><tbody>\r\n");
 
     // list drive slots
     char disk_id;
@@ -364,25 +365,25 @@ int fnHttpServiceBrowser::browse_listdrives(mg_connection *c, int slot, const ch
     bool is_mounted;
     for(int drive_slot = 0; drive_slot < MAX_DISK_DEVICES; drive_slot++)
     {
-        disk_id = (char) theFuji.get_disk_id(drive_slot);
+        disk_id = (char) theFuji->get_disk_id(drive_slot);
         // "(Dn:)" if any rotation has occurred
         if (disk_id != (char) (0x31 + drive_slot))
             snprintf(slot_disk, sizeof slot_disk, " (D%c:)", disk_id);
         else
             *slot_disk = '\0';
         host_slot = Config.get_mount_host_slot(drive_slot);
-        is_mounted = (theFuji.get_disks(drive_slot)->fileh != nullptr);
+        is_mounted = (theFuji->get_disk(drive_slot)->fileh != nullptr);
         mg_http_printf_chunk(c, "<tr>"
                 "<td>Drive Slot %d%s</td>"
                 "<td><a title=\"Mount Read-Only\" href=\"?action=newmount&slot=%d&mode=r\">[ R ]</a>"
                 "<a title=\"Mount Read-Write\" href=\"?action=newmount&slot=%d&mode=w\">[ W ]</a> "
                 "<a title=\"%s\" href=\"?action=%s&slot=%d\">[ %s ]</a></td>"
                 "<td>%s (%s)</td>"
-            "</tr>",
+            "</tr>\r\n",
             drive_slot+1, slot_disk,
             // action=newmount&slot=..
             drive_slot+1, drive_slot+1,
-            (host_slot == HOST_SLOT_INVALID) ? "Nothing to do" : 
+            (host_slot == HOST_SLOT_INVALID) ? "Nothing to do" :
                 is_mounted ? "Eject current image" : "Mount current image",
             (host_slot == HOST_SLOT_INVALID) ? "none" : is_mounted ? "eject" : "mount",
             drive_slot+1,
@@ -392,7 +393,7 @@ int fnHttpServiceBrowser::browse_listdrives(mg_connection *c, int slot, const ch
                 (Config.get_host_name(host_slot) + " :: "+ Config.get_mount_path(drive_slot)).c_str(),
             // Mount mode: R / W or "Empty" for empty slot
             (host_slot == HOST_SLOT_INVALID) ? "Empty" :
-                Config.get_mount_mode(drive_slot) == fnConfig::mount_modes::MOUNTMODE_READ ? 
+                Config.get_mount_mode(drive_slot) == fnConfig::mount_modes::MOUNTMODE_READ ?
                     (is_mounted ? "R" : "R-") : (is_mounted ? "W" : "W-")
         );
     }
@@ -416,7 +417,7 @@ void fnHttpServiceBrowser::print_head(mg_connection *c, int slot)
         "a {color: black; text-decoration: none; border-radius: .2em; padding: .1em;} "
         "a:hover {background: gold; transition: background-color .4s;}"
         "</style></head>"
-        "<body><h1><a href=\"/\" title=\"Back to Config\">&#215;</a> Host %d</h1>", 
+        "<body><h1><a href=\"/\" title=\"Back to Config\">&#215;</a> Host %d</h1>",
         Config.get_general_label().c_str() ,slot+1, slot+1);
         // &#129128; &#129120; - nice wide leftwards arrow but not working in Safari
 }
@@ -428,7 +429,7 @@ void fnHttpServiceBrowser::print_navi(mg_connection *c, int slot, const char *es
     const char *p_enc = enc_path;
 
     mg_http_printf_chunk(c,
-        "<h2><a href=\"/browse/host/%d\">%s</a>:", slot+1, theFuji.get_hosts(slot)->get_hostname()); // TODO escape hostname
+        "<h2><a href=\"/browse/host/%d\">%s</a>", slot+1, theFuji->get_host(slot)->get_hostname()); // TODO escape hostname
 
     for(;;)
     {
@@ -508,7 +509,7 @@ void fnHttpServiceBrowser::print_dentry(mg_connection *c, fsdir_entry *dp, int s
     }
     strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M", localtime(&dp->modified_time));
     mg_http_printf_chunk(c,
-        "<tr><td>%s</td><td>%s</td><td><a href=\"/browse/host/%d%s%s%s%s\">%s%s</a></td></tr>",
+        "<tr><td>%s</td><td>%s</td><td><a href=\"/browse/host/%d%s%s%s%s\">%s%s</a></td></tr>\r\n",
         size, mod, slot+1, enc_path, sep, enc_filename, form, esc_filename, slash);
 }
 
@@ -536,12 +537,12 @@ int fnHttpServiceBrowser::browse_sendfile(mg_connection *c, FileSystem *fs, fnFi
 
 int fnHttpServiceBrowser::process_browse_get(mg_connection *c, mg_http_message *hm, int host_slot, const char *host_path, unsigned pathlen)
 {
-    fujiHost &fnHost = *theFuji.get_hosts(host_slot);
+    fujiHost &fnHost = *theFuji->get_host(host_slot);
     FileSystem *fs;
     int host_type;
     bool started = false;
 
-    Debug_printf("Browse host %d (%s)\n", host_slot, fnHost.get_hostname());
+    Debug_printf("Browse host %d (%s) host_path=\"%.*s\"\n", host_slot, fnHost.get_hostname(), pathlen, host_path);
 
     char hostname[MAX_HOSTNAME_LEN];
     fnHost.get_hostname(hostname, MAX_HOSTNAME_LEN);
@@ -570,6 +571,11 @@ int fnHttpServiceBrowser::process_browse_get(mg_connection *c, mg_http_message *
         fs = new FileSystemFTP;
         host_type = HOSTTYPE_FTP;
     }
+    else if (strncasecmp("http://", hostname, 7) == 0 || strncasecmp("https://", hostname, 8) == 0)
+    {
+        fs = new FileSystemHTTP;
+        host_type = HOSTTYPE_HTTP;
+    }
     else
     {
         fs = new FileSystemTNFS;
@@ -594,6 +600,9 @@ int fnHttpServiceBrowser::process_browse_get(mg_connection *c, mg_http_message *
         break;
     case HOSTTYPE_FTP:
         started = ((FileSystemFTP *)fs)->start(hostname);
+        break;
+    case HOSTTYPE_HTTP:
+        started = ((FileSystemHTTP *)fs)->start(hostname);
         break;
     case HOSTTYPE_TNFS:
         started = ((FileSystemTNFS *)fs)->start(hostname);

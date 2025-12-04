@@ -5,9 +5,8 @@
 #include "rs232cpm.h"
 
 #include "fnSystem.h"
-#include "fnUART.h"
 #include "fnWiFi.h"
-#include "fuji.h"
+#include "fujiDevice.h"
 #include "fnFS.h"
 #include "fnFsSD.h"
 
@@ -58,7 +57,8 @@ void rs232CPM::rs232_handle_cpm()
 
 void rs232CPM::init_cpm(int baud)
 {
-    fnUartBUS.set_baudrate(baud);
+#warning "Why is CP/M mucking with the bus?"
+    SYSTEM_BUS.setBaudrate(baud);
     Status = Debug = 0;
     Break = Step = -1;
     RAM = (uint8_t *)malloc(MEMSIZE);
@@ -69,11 +69,9 @@ void rs232CPM::init_cpm(int baud)
     memset(pattern, 0, sizeof(pattern));
 }
 
-void rs232CPM::rs232_process(uint32_t commanddata, uint8_t checksum)
+void rs232CPM::rs232_process(cmdFrame_t *cmd_ptr)
 {
-    cmdFrame.commanddata = commanddata;
-    cmdFrame.checksum = checksum;
-
+    cmdFrame = *cmd_ptr;
     switch (cmdFrame.comnd)
     {
     case 'G':

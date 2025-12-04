@@ -20,6 +20,11 @@
  */
 #define NUM_DEVICES 8
 
+/*
+ * Size of the serial packet we can send to Lynx (determined mainly by the Lynx RX buffer)
+ */
+#define SERIAL_PACKET_SIZE 256
+
 /**
  * The size of rx and tx buffers
  */
@@ -120,7 +125,7 @@ public:
      * @brief parse incoming data
      */
     void json_parse();
-    
+
     /**
      * @brief JSON Query
      * @param s size of query
@@ -249,7 +254,7 @@ private:
     /**
      * Return value for DSTATS inquiry
      */
-    uint8_t inq_dstats = 0xFF;
+    AtariSIODirection inq_dstats = SIO_DIRECTION_INVALID;
 
     /**
      * The login to use for a protocol action
@@ -398,7 +403,7 @@ private:
      * @brief Perform the inquiry, handle both local and protocol commands.
      * @param inq_cmd the command to check against.
      */
-    void do_inquiry(unsigned char inq_cmd);
+    void do_inquiry(fujiCommandID_t inq_cmd);
 
     /**
      * @brief set translation specified by aux1 to aux2_translation mode.

@@ -3,7 +3,7 @@
 #include "../../include/debug.h"
 
 #include "printer.h"
-#include "fuji.h"
+#include "fujiDevice.h"
 
 #include "fnSystem.h"
 #include "fnConfig.h"
@@ -14,9 +14,8 @@
 
 #ifdef BUILD_APPLE
 #include "iwm/printerlist.h"
-#include "iwm/fuji.h"
+#include "iwm/iwmFuji.h"
 #define PRINTER_CLASS iwmPrinter
-extern iwmFuji theFuji;
 #endif /* BUILD_APPLE */
 
 bool udpactivate = false;
@@ -130,10 +129,10 @@ std::map<std::string, std::string> fnHttpServiceConfigurator::parse_postdata(con
 void udpstream_activate()
 {
 #ifdef BUILD_ATARI
-    SIO.setUDPHost(Config.get_network_udpstream_host().c_str(), Config.get_network_udpstream_port());
+    SYSTEM_BUS.setUDPHost(Config.get_network_udpstream_host().c_str(), Config.get_network_udpstream_port());
 #endif /* ATARI */
 #ifdef BUILD_LYNX
-    ComLynx.setUDPHost(Config.get_network_udpstream_host().c_str(), Config.get_network_udpstream_port());
+    SYSTEM_BUS.setUDPHost(Config.get_network_udpstream_host().c_str(), Config.get_network_udpstream_port());
 #endif /* LYNX */
 }
 
@@ -147,7 +146,7 @@ void fnHttpServiceConfigurator::config_hsio(std::string hsioindex)
         index = pc - '0';
     else
     {
-        Debug_printf("Bad HSIO index value: %s\n", hsioindex);
+        Debug_printf("Bad HSIO index value: %s\n", hsioindex.c_str());
         return;
     }
 #else
@@ -163,7 +162,7 @@ void fnHttpServiceConfigurator::config_hsio(std::string hsioindex)
     }
 #endif
 
-    SIO.setHighSpeedIndex(index);
+    SYSTEM_BUS.setHighSpeedIndex(index);
     // Store our change in Config
     Config.store_general_hsioindex(index);
     Config.save();
@@ -284,7 +283,7 @@ void fnHttpServiceConfigurator::config_cassette_play(std::string play_record)
     // find cassette via thefuji object?
     Debug_printf("New play/record button value: %s\n", play_record.c_str());
     bool isRecord = util_string_value_is_true(play_record);
-    theFuji.cassette()->set_buttons(isRecord);
+    theFuji->cassette()->set_buttons(isRecord);
     Config.store_cassette_buttons(isRecord);
 
     Config.save();
@@ -295,7 +294,7 @@ void fnHttpServiceConfigurator::config_cassette_resistor(std::string resistor)
 {
 #ifdef BUILD_ATARI
     bool isPullDown = util_string_value_is_true(resistor);
-    theFuji.cassette()->set_pulldown(isPullDown);
+    theFuji->cassette()->set_pulldown(isPullDown);
     Config.store_cassette_pulldown(isPullDown);
 
     Config.save();
@@ -306,7 +305,7 @@ void fnHttpServiceConfigurator::config_cassette_rewind()
 {
 #ifdef BUILD_ATARI
     Debug_printf("Rewinding cassette.\n");
-    SIO.getCassette()->rewind();
+    SYSTEM_BUS.getCassette()->rewind();
 
     Config.save();
 #endif /* ATARI */
@@ -322,10 +321,10 @@ void fnHttpServiceConfigurator::config_udpstream(std::string hostname)
     {
         Debug_println("UDPStream Stop Request");
 #ifdef BUILD_ATARI
-        SIO.setUDPHost("STOP", port);
+        SYSTEM_BUS.setUDPHost("STOP", port);
 #endif /* ATARI */
 #ifdef BUILD_LYNX
-        ComLynx.setUDPHost("STOP", port);
+        SYSTEM_BUS.setUDPHost("STOP", port);
 #endif /* LYNX */
         Config.store_udpstream_host("");
         Config.store_udpstream_port(0);
@@ -442,7 +441,8 @@ void fnHttpServiceConfigurator::config_printer_port(std::string printernumber, s
     fnPrinters.set_port(0, port);
 #ifdef BUILD_ATARI
     // Tell the SIO daisy chain to change the device ID for this printer
-    SIO.changeDeviceId(fnPrinters.get_ptr(0), SIO_DEVICEID_PRINTER + port);
+    SYSTEM_BUS.changeDeviceId(fnPrinters.get_ptr(0),
+                              (fujiDeviceID_t) (FUJI_DEVICEID_PRINTER + port));
 #endif
 
     Config.save();
@@ -482,6 +482,16 @@ void fnHttpServiceConfigurator::config_cpm_ccp(std::string cpm_ccp)
         Debug_printf("Set CP/M CCP File: %s\n", cpm_ccp.c_str());
         Config.store_ccp_filename(cpm_ccp.c_str());
     }
+    Config.save();
+}
+
+void fnHttpServiceConfigurator::config_ng(std::string config_ng)
+{
+    Debug_printf("New CONFIG-NG value: %s\n", config_ng.c_str());
+
+    // Store our change in Config
+    Config.store_general_config_ng(atoi(config_ng.c_str()));
+    // Save change
     Config.save();
 }
 
@@ -534,6 +544,7 @@ void fnHttpServiceConfigurator::config_serial(std::string port, std::string baud
     {
         Config.save();
 
+#ifdef UNUSED
 #if defined(BUILD_ATARI)
         if (fnSioCom.get_sio_mode() == SioCom::sio_mode::SERIAL)
         {
@@ -560,8 +571,20 @@ void fnHttpServiceConfigurator::config_serial(std::string port, std::string baud
             fnDwCom.begin(Config.get_serial_baud());
         }
 #endif
+#endif /* UNUSED */
     }
 }
+#elif defined(BUILD_RS232)
+    // RS232 Baud Rate
+    void fnHttpServiceConfigurator::config_serial(std::string port, std::string baud, std::string command, std::string proceed)
+    {
+        if (!baud.empty())
+        {
+            //Debug_printf("Set RS232 baud: %s\n", atoi(baud.c_str()));
+            Config.store_rs232_baud(atoi(baud.c_str()));
+            Config.save();
+        }
+    }
 #endif // !ESP_PLATFORM
 
 void fnHttpServiceConfigurator::config_boip(std::string enable_boip, std::string boip_host_port)
@@ -592,10 +615,8 @@ void fnHttpServiceConfigurator::config_boip(std::string enable_boip, std::string
 
     // Update settings (on ESP reboot is needed)
 #ifndef ESP_PLATFORM
-#if defined(BUILD_ATARI)
-    fnSioCom.set_netsio_host(Config.get_boip_host().c_str(), Config.get_boip_port());
-#elif defined(BUILD_COCO)
-    fnDwCom.set_becker_host(Config.get_boip_host().c_str(), Config.get_boip_port());
+#if defined(BUILD_ATARI) || defined(BUILD_COCO)
+    SYSTEM_BUS.setHost(Config.get_boip_host().c_str(), Config.get_boip_port());
 #endif
 #endif
 
@@ -606,10 +627,8 @@ void fnHttpServiceConfigurator::config_boip(std::string enable_boip, std::string
 
     // Apply settings (on ESP reboot is needed)
 #ifndef ESP_PLATFORM
-#if defined(BUILD_ATARI)
-    fnSioCom.reset_sio_port(Config.get_boip_enabled() ? SioCom::sio_mode::NETSIO : SioCom::sio_mode::SERIAL);
-#elif defined(BUILD_COCO)
-    fnDwCom.reset_drivewire_port(Config.get_boip_enabled() ? DwCom::dw_mode::BECKER : DwCom::dw_mode::SERIAL);
+#if defined(BUILD_ATARI) ||  defined(BUILD_COCO)
+    SYSTEM_BUS.selectSerialPort(Config.get_boip_enabled() == 0);
 #endif
 #endif
 
@@ -643,7 +662,7 @@ int fnHttpServiceConfigurator::process_config_post(const char *postdata, size_t 
 
     free(decoded_buf);
 
-#ifndef ESP_PLATFORM
+#if !defined(ESP_PLATFORM) || defined(BUILD_RS232)
     bool update_serial = false;
     std::string str_serial_port;
     std::string str_serial_baud;
@@ -755,7 +774,11 @@ int fnHttpServiceConfigurator::process_config_post(const char *postdata, size_t 
         {
             config_alt_filename(i->second);
         }
-#ifndef ESP_PLATFORM
+        else if (i->first.compare("config_ng") == 0)
+        {
+            config_ng(i->second);
+        }
+#if !defined(ESP_PLATFORM) || defined(BUILD_RS232)
         else if (i->first.compare("serial_port") == 0)
         {
             str_serial_port = i->second;
@@ -799,7 +822,7 @@ int fnHttpServiceConfigurator::process_config_post(const char *postdata, size_t 
         udpstream_activate();
     }
 
-#ifndef ESP_PLATFORM
+#if !defined(ESP_PLATFORM) || defined(BUILD_RS232)
     if (update_serial)
     {
         config_serial(str_serial_port, str_serial_baud, str_serial_command, str_serial_proceed);

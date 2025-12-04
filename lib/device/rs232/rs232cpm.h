@@ -17,13 +17,13 @@ class rs232CPM : public virtualDevice
 private:
 
     void rs232_status() override;
-    void rs232_process(uint32_t commanddata, uint8_t checksum) override;
+    void rs232_process(cmdFrame_t *cmd_ptr) override;
 
 public:
-    bool cpmActive = false; 
+    bool cpmActive = false;
     void init_cpm(int baud);
     void rs232_handle_cpm();
-    
+
 };
 
 #endif /* RS232CPM_H */

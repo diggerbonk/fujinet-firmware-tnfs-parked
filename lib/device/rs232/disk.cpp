@@ -6,7 +6,7 @@
 
 #include "../../include/debug.h"
 
-#include "fuji.h"
+#include "fujiDevice.h"
 #include "utils.h"
 
 #define RS232_DISKCMD_FORMAT 0x21
@@ -27,30 +27,27 @@
 #define RS232_DISKCMD_PERCOM_READ 0x4E
 #define RS232_DISKCMD_PERCOM_WRITE 0x4F
 
-// External ref to fuji object.
-extern rs232Fuji theFuji;
-
 rs232Disk::rs232Disk()
 {
     device_active = false;
-    mount_time = 0;
+    _mount_time = 0;
 }
 
 // Read disk data and send to computer
 void rs232Disk::rs232_read()
 {
-    Debug_printf("disk READ %u\n",UINT16_FROM_HILOBYTES(cmdFrame.aux2,cmdFrame.aux1));
+        Debug_printf("disk READ %lu\n", cmdFrame.aux);
 
-    if (_disk == nullptr)
+        if (_disk == nullptr)
     {
         rs232_error();
         return;
     }
 
-    uint16_t readcount;
+    uint32_t readcount;
 
-    bool err = _disk->read(UINT16_FROM_HILOBYTES(cmdFrame.aux2, cmdFrame.aux1), &readcount);
-    
+    bool err = _disk->read(cmdFrame.aux, &readcount);
+
     // Send result to Atari
     bus_to_computer(_disk->_disk_sectorbuff, readcount, err);
 }
@@ -62,7 +59,7 @@ void rs232Disk::rs232_write(bool verify)
 
     if (_disk != nullptr)
     {
-        uint16_t sectorNum = UINT16_FROM_HILOBYTES(cmdFrame.aux2, cmdFrame.aux1);
+        uint16_t sectorNum = cmdFrame.aux;
         uint16_t sectorSize = _disk->sector_size(sectorNum);
 
         memset(_disk->_disk_sectorbuff, 0, DISK_SECTORBUF_SIZE);
@@ -114,7 +111,7 @@ void rs232Disk::rs232_status()
               810 drive: $E0 = 224 vertical blanks (4 mins NTSC)
             XF551 drive: $FE = 254 veritcal blanks (4.5 mins NTSC)
 
-        #3 - Unused ($00)    
+        #3 - Unused ($00)
     */
     // TODO: Why $DF for second byte?
     // TODO: Set bit 4 of drive status and bit 6 of FDC status on read-only disk
@@ -146,7 +143,7 @@ void rs232Disk::rs232_format()
         return;
     }
 
-    uint16_t responsesize;
+    uint32_t responsesize;
     bool err = _disk->format(&responsesize);
 
     // Send to computer
@@ -195,7 +192,7 @@ void rs232Disk::rs232_write_percom_block()
    then we assume it's MEDIATYPE_ATR.
    Return value is MEDIATYPE_UNKNOWN in case of failure.
 */
-mediatype_t rs232Disk::mount(FILE *f, const char *filename, uint32_t disksize, mediatype_t disk_type)
+mediatype_t rs232Disk::mount(fnFile *f, const char *filename, uint32_t disksize, mediatype_t disk_type)
 {
     // TAPE or CASSETTE: use this function to send file info to cassette device
     //  MediaType::discover_disktype(filename) can detect CAS and WAV files
@@ -219,7 +216,7 @@ mediatype_t rs232Disk::mount(FILE *f, const char *filename, uint32_t disksize, m
     case MEDIATYPE_UNKNOWN:
     default:
         device_active = true;
-	mount_time = time(NULL);
+        _mount_time = time(NULL);
         _disk = new MediaTypeImg();
         return _disk->mount(f, disksize);
     }
@@ -244,12 +241,12 @@ void rs232Disk::unmount()
     {
         _disk->unmount();
         device_active = false;
-	mount_time = 0;
+        _mount_time = 0;
     }
 }
 
 // Create blank disk
-bool rs232Disk::write_blank(FILE *f, uint16_t sectorSize, uint16_t numSectors)
+bool rs232Disk::write_blank(fnFile *f, uint16_t sectorSize, uint16_t numSectors)
 {
     Debug_print("disk CREATE NEW IMAGE\n");
 
@@ -257,11 +254,8 @@ bool rs232Disk::write_blank(FILE *f, uint16_t sectorSize, uint16_t numSectors)
 }
 
 // Process command
-void rs232Disk::rs232_process(uint32_t commanddata, uint8_t checksum)
+void rs232Disk::rs232_process(cmdFrame_t *cmd_ptr)
 {
-    cmdFrame.commanddata = commanddata;
-    cmdFrame.checksum = checksum;
-
     // if (_disk == nullptr || _disk->_disktype == MEDIATYPE_UNKNOWN)
     //     return;
 
@@ -271,6 +265,7 @@ void rs232Disk::rs232_process(uint32_t commanddata, uint8_t checksum)
 
     Debug_print("disk rs232_process()\n");
 
+    cmdFrame = *cmd_ptr;
     switch (cmdFrame.comnd)
     {
     case RS232_DISKCMD_READ:

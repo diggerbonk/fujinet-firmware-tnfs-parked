@@ -121,10 +121,10 @@ class iwmFuji;     // declare here so can reference it, but define in fuji.h
 class iwmModem;    // declare here so can reference it, but define in modem.h
 class iwmNetwork;  // declare here so can reference it, but define in network.h
 class iwmPrinter;  // Printer device
-class iwmDisk;     // disk device cause I need to use "iwmDisk smort" for prototyping in iwmBus::service()
+class iwmDisk;     // disk device cause I need to use "iwmDisk smort" for prototyping in systemBus::service()
 class iwmCPM;      // CPM Virtual Device
 class iwmClock;    // Real Time Clock Device
-class iwmBus;      // forward declare bus so can be friend
+class systemBus;      // forward declare bus so can be friend
 
 // Sorry, this  is the protocol adapter's fault. -Thom
 union cmdFrame_t
@@ -181,8 +181,8 @@ enum class iwm_enable_state_t
 {
   off,
   off2on,
+  on2off,
   on,
-  on2off
 };
 
 struct iwm_device_info_block_t
@@ -199,9 +199,9 @@ struct iwm_device_info_block_t
   void print_packet(uint8_t* data);
 //#endif
 
-class iwmDevice
+class virtualDevice
 {
-friend iwmBus; // put here for prototype, not sure if will need to keep it
+friend systemBus; // put here for prototype, not sure if will need to keep it
 
 protected:
   // set these things in constructor or initializer?
@@ -267,20 +267,14 @@ public:
   //void assign_id(uint8_t n) { _devnum = n; };
 
   void assign_name(std::string name) {dib.device_name = name;}
-
-  /**
-   * @brief Get the iwmBus object that this iwmDevice is attached to.
-   */
-  iwmBus iwm_get_bus();
-
 };
 
-class iwmBus
+class systemBus
 {
 private:
 
 
-  iwmDevice *_activeDev = nullptr;
+  virtualDevice *_activeDev = nullptr;
 
   iwmFuji *_fujiDev = nullptr;
   iwmModem *_modemDev = nullptr;
@@ -305,8 +299,9 @@ private:
 #ifdef DEBUG
   iwm_phases_t oldphase;
 #endif
+  uint8_t current_disk2 = 0;
 
-  iwm_enable_state_t iwm_drive_enabled();
+  iwm_enable_state_t iwm_motor_state();
   iwm_enable_state_t _old_enable_state;
   iwm_enable_state_t _new_enable_state;
   // uint8_t enable_values;
@@ -324,7 +319,7 @@ private:
   int new_track = -1;
 
 public:
-  std::forward_list<iwmDevice *> _daisyChain;
+  std::forward_list<virtualDevice *> _daisyChain;
 
   cmdPacket_t command_packet;
   bool iwm_decode_data_packet(uint8_t *a, int &n);
@@ -341,14 +336,14 @@ public:
   void shutdown();
 
   int numDevices();
-  void addDevice(iwmDevice *pDevice, iwm_fujinet_type_t deviceType); // todo: probably get called by handle_init()
-  void remDevice(iwmDevice *pDevice);
-  iwmDevice *deviceById(int device_id);
-  iwmDevice *firstDev() {return _daisyChain.front();}
-  uint8_t* devBuffer() {return (uint8_t *)iwmDevice::data_buffer;}
+  void addDevice(virtualDevice *pDevice, iwm_fujinet_type_t deviceType); // todo: probably get called by handle_init()
+  void remDevice(virtualDevice *pDevice);
+  virtualDevice *deviceById(int device_id);
+  virtualDevice *firstDev() {return _daisyChain.front();}
+  uint8_t* devBuffer() {return (uint8_t *)virtualDevice::data_buffer;}
   void enableDevice(uint8_t device_id);
   void disableDevice(uint8_t device_id);
-  void changeDeviceId(iwmDevice *p, int device_id);
+  void changeDeviceId(virtualDevice *p, int device_id);
   iwmPrinter *getPrinter() { return _printerdev; }
   bool shuttingDown = false;                                  // TRUE if we are in shutdown process
   bool getShuttingDown() { return shuttingDown; };
@@ -356,8 +351,8 @@ public:
 
 };
 
-extern iwmBus IWM;
+extern systemBus SYSTEM_BUS;
 
-#define IWM_ACTIVE_DISK2 ((iwmDisk2 *) theFuji.get_disk_dev(MAX_SP_DEVICES + diskii_xface.iwm_enable_states() - 1))
+#define IWM_ACTIVE_DISK2 ((iwmDisk2 *) theFuji->get_disk_dev(MAX_SPDISK_DEVICES + diskii_xface.iwm_active_drive() - 1))
 #endif // guard
 #endif /* BUILD_APPLE */

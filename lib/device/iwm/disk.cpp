@@ -8,8 +8,9 @@
 #include "fnSystem.h"
 // #include "fnFsTNFS.h"
 // #include "fnFsSD.h"
+#include "fsFlash.h"
 #include "led.h"
-#include "fuji.h"
+#include "fujiDevice.h"
 
 // #define LOCAL_TNFS
 
@@ -27,11 +28,11 @@ iwmDisk::~iwmDisk()
 // Bit 3: Format allowed
 // Bit 2: Media write protected
 // Bit 1: Currently interrupting (//c only)
-// Bit 0: Disk Switched 
+// Bit 0: Disk Switched
 uint8_t iwmDisk::create_status()
 {
   uint8_t status = 0b11101000;
-  status = (device_active) ? (status |   STATCODE_DEVICE_ONLINE) : 
+  status = (device_active) ? (status |   STATCODE_DEVICE_ONLINE) :
                              (status & ~(STATCODE_DEVICE_ONLINE));
   if (readonly)               status |=  STATCODE_WRITE_PROTECT;
   if (_disk != nullptr)       status |=  (1 << 4);
@@ -55,7 +56,7 @@ std::vector<uint8_t> iwmDisk::create_blocksize(bool is_32_bits)
         block_size.push_back(static_cast<uint8_t>((_disk->num_blocks >> 24) & 0xff));
     }
 
-    Debug_printf("\r\nDIB number of blocks %d\r\n", _disk->num_blocks);
+    Debug_printf("\r\nDIB number of blocks %lu\r\n", _disk->num_blocks);
   }
   else
   {
@@ -85,7 +86,7 @@ uint8_t iwmDisk::smartport_device_subtype()
 {
   if (_disk == nullptr)
     return SP_SUBTYPE_BYTE_SWITCHED;
-    
+
   if (_disk->num_blocks < 1601)
     return SP_SUBTYPE_BYTE_SWITCHED; // Floppy disk
   else
@@ -117,7 +118,7 @@ void iwmDisk::send_status_reply_packet()
   std::vector<uint8_t> data;
   data.push_back(status);
   data.insert(data.end(), block_size.begin(), block_size.end());
-  IWM.iwm_send_packet(id(), iwm_packet_type_t::status,SP_ERR_NOERROR, data.data(), data.size());
+  SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::status,SP_ERR_NOERROR, data.data(), data.size());
 }
 
 //*****************************************************************************
@@ -145,7 +146,7 @@ void iwmDisk::send_extended_status_reply_packet() //XXX! Currently unused
   std::vector<uint8_t> data;
   data.push_back(status);
   data.insert(data.end(), block_size.begin(), block_size.end());
-  IWM.iwm_send_packet(id(), iwm_packet_type_t::ext_status, SP_ERR_NOERROR, data.data(), data.size());
+  SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::ext_status, SP_ERR_NOERROR, data.data(), data.size());
 }
 
 //*****************************************************************************
@@ -172,7 +173,7 @@ void iwmDisk::send_status_dib_reply_packet() // to do - abstract this out with p
     { smartport_device_type(), smartport_device_subtype() },    // type, subtype
     { 0x01, 0x0f }                                              // version.
   );
-	IWM.iwm_send_packet(id(), iwm_packet_type_t::status, SP_ERR_NOERROR, data.data(), data.size());
+        SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::status, SP_ERR_NOERROR, data.data(), data.size());
 }
 
 //*****************************************************************************
@@ -206,18 +207,18 @@ void iwmDisk::send_extended_status_dib_reply_packet() //XXX! currently unused
     switched = false;
   }
 
-  IWM.iwm_send_packet(id(), iwm_packet_type_t::ext_status, SP_ERR_NOERROR, data.data(), data.size());
+  SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::ext_status, SP_ERR_NOERROR, data.data(), data.size());
 }
 
-void iwmDisk::iwm_ctrl(iwm_decoded_cmd_t cmd) 
+void iwmDisk::iwm_ctrl(iwm_decoded_cmd_t cmd)
 {
   err_result = SP_ERR_NOERROR;
-  uint8_t control_code = get_status_code(cmd); 
+  uint8_t control_code = get_status_code(cmd);
   Debug_printf("\nDisk Device %02x Control Code %02x", id(), control_code);
   // already called by ISR
   data_len = 512;
   Debug_printf("\nDecoding Control Data Packet:");
-  IWM.iwm_decode_data_packet((uint8_t *)data_buffer, data_len);
+  SYSTEM_BUS.iwm_decode_data_packet((uint8_t *)data_buffer, data_len);
   // data_len = decode_packet((uint8_t *)data_buffer);
   print_packet((uint8_t *)data_buffer, data_len);
 
@@ -227,13 +228,13 @@ void iwmDisk::iwm_ctrl(iwm_decoded_cmd_t cmd)
     Debug_printf("Handling Eject command\r\n");
     unmount();
     switched = false; //force switched = false when ejected from host.
-    theFuji.handle_ctl_eject(_devnum);
+    theFuji->handle_ctl_eject(_devnum);
     break;
   default:
     err_result = SP_ERR_BADCTL;
     break;
   }
-  send_reply_packet(err_result); 
+  send_reply_packet(err_result);
 }
 
 void iwmDisk::process(iwm_decoded_cmd_t cmd)
@@ -249,7 +250,7 @@ void iwmDisk::process(iwm_decoded_cmd_t cmd)
     if (disk_num == '0' && status_code > 0x05) {
       // THIS IS AN OLD HACK FOR CALLING STATUS ON THE FUJI DEVICE INSTEAD OF ADDING THE_FUJI AS A DEVICE.
       Debug_printf("\r\nUsing DISK_0 for FUJI device\r\n");
-      theFuji.FujiStatus(cmd);
+      theFuji->FujiStatus(cmd);
     }
     else {
       iwm_status(cmd);
@@ -272,7 +273,7 @@ void iwmDisk::process(iwm_decoded_cmd_t cmd)
     if (disk_num == '0' && status_code > 0x0A) {
       // THIS IS AN OLD HACK FOR CALLING CONTROL ON THE FUJI DEVICE INSTEAD OF ADDING THE_FUJI AS A DEVICE.
       Debug_printf("\r\nUsing DISK_0 for FUJI device\r\n");
-      theFuji.FujiControl(cmd);
+      theFuji->FujiControl(cmd);
     }
     else {
       iwm_ctrl(cmd);
@@ -293,9 +294,9 @@ void iwmDisk::iwm_readblock(iwm_decoded_cmd_t cmd)
 
   // source = cmd.dest; // we are the destination and will become the source // packet_buffer[6];
   Debug_printf("\r\nDrive %02x ", id());
-  
 
-  
+
+
   // LBH = cmd.grp7msb; //packet_buffer[16]; // high order bits
   // LBT = cmd.g7byte5; //packet_buffer[21]; // block number high
   // LBL = cmd.g7byte4; //packet_buffer[20]; // block number middle
@@ -307,7 +308,7 @@ void iwmDisk::iwm_readblock(iwm_decoded_cmd_t cmd)
   // block_num = block_num + (((LBL & 0x7f) | (((unsigned short)LBH << 4) & 0x80)) << 8);
   // block_num = block_num + (((LBT & 0x7f) | (((unsigned short)LBH << 5) & 0x80)) << 16);
   block_num = get_block_number(cmd);
-  Debug_printf(" Read block %06x\r\n", block_num);
+  Debug_printf(" Read block %06lx\r\n", block_num);
   if (!(_disk != nullptr))
   {
     Debug_printf(" - ERROR - No image mounted");
@@ -335,18 +336,18 @@ void iwmDisk::iwm_readblock(iwm_decoded_cmd_t cmd)
     send_reply_packet(SP_ERR_IOERROR);
     return; // todo - true or false?
   }
-  
+
   // send_data_packet();
   Debug_printf("\r\nsending block packet ...");
-  if (IWM.iwm_send_packet(id(), iwm_packet_type_t::data, 0, data_buffer, BLOCK_DATA_LEN))
+  if (SYSTEM_BUS.iwm_send_packet(id(), iwm_packet_type_t::data, 0, data_buffer, BLOCK_DATA_LEN))
    ((MediaTypePO*)_disk)->reset_seek_opto();  // force seek next time if send error
 }
 
 void iwmDisk::iwm_writeblock(iwm_decoded_cmd_t cmd)
 {
   uint8_t status = 0;
- 
- 
+
+
  //  uint8_t source = cmd.dest; // packet_buffer[6];
   // to do - actually we will already know that the cmd.dest == id(), so can just use id() here
   Debug_printf("\r\nDrive %02x ", id());
@@ -355,11 +356,11 @@ void iwmDisk::iwm_writeblock(iwm_decoded_cmd_t cmd)
   // block num second byte
   //Added (unsigned short) cast to ensure calculated block is not underflowing.
   // block_num = block_num + (((cmd.g7byte4 & 0x7f) | (((unsigned short)cmd.grp7msb << 4) & 0x80)) * 256);
-  Debug_printf("Write block %06x", block_num);
+  Debug_printf("Write block %06lx", block_num);
   //get write data packet, keep trying until no timeout
   // to do - this blows up - check handshaking
   data_len = BLOCK_DATA_LEN;
-  if (IWM.iwm_decode_data_packet((unsigned char *)data_buffer, data_len))
+  if (SYSTEM_BUS.iwm_decode_data_packet((unsigned char *)data_buffer, data_len))
   {
     Debug_printf("\r\nTIMEOUT in read packet!");
     return;
@@ -368,8 +369,8 @@ void iwmDisk::iwm_writeblock(iwm_decoded_cmd_t cmd)
   if (data_len == -1)
     iwm_return_ioerror();
   else
-    { // We have to return the error after ingesting the block to write or ProDOS doesn't correctly see the status. 
-      
+    { // We have to return the error after ingesting the block to write or ProDOS doesn't correctly see the status.
+
       if((!device_active)) {
         Debug_printf("iwm_writeblock while device offline!\r\n");
         send_reply_packet(SP_ERR_OFFLINE);
@@ -380,7 +381,7 @@ void iwmDisk::iwm_writeblock(iwm_decoded_cmd_t cmd)
         send_reply_packet(SP_ERR_NOWRITE);
         switched = false;
         return;
-      } 
+      }
       if(switched) {
         Debug_printf("iwm_writeblock while disk switched = true\r\nn");
         send_reply_packet(SP_ERR_OFFLINE);
@@ -395,7 +396,7 @@ void iwmDisk::iwm_writeblock(iwm_decoded_cmd_t cmd)
 
       uint16_t sdstato = BLOCK_DATA_LEN;
       _disk->write(block_num, &sdstato, data_buffer);
-      
+
       if (sdstato != BLOCK_DATA_LEN)
       {
         Debug_printf("\r\nFile Write err: %d bytes", sdstato);
@@ -458,8 +459,9 @@ mediatype_t iwmDisk::mount(fnFile *f, const char *filename, uint32_t disksize, m
   if (disk_type == MEDIATYPE_UNKNOWN) {
       Debug_printf("\r\nMedia Type UNKNOWN - no mount in disk.cpp");
       device_active = false;
+      is_config_device = false;
   }
-  else if (_disk && _disk->_disk_filename)
+  else if (_disk && strlen(_disk->_disk_filename))
       strcpy(_disk->_disk_filename, filename);
 
   return disk_type;
@@ -484,7 +486,6 @@ mediatype_t iwmDisk::mount_file(fnFile *f, uint32_t disksize, mediatype_t disk_t
     }
 
   if (disk_type != MEDIATYPE_UNKNOWN) {
-    _disk->_media_host = host;
     _disk->_mediatype = disk_type;
     disk_type = _disk->mount(f, disksize);
   }
@@ -496,6 +497,7 @@ mediatype_t iwmDisk::mount_file(fnFile *f, uint32_t disksize, mediatype_t disk_t
       readonly = false;
 
     device_active = true; //change status only after we are mounted
+    is_config_device = false;
   }
 
   return disk_type;
@@ -509,26 +511,52 @@ void iwmDisk::unmount()
         delete _disk;
         _disk = nullptr;
         device_active = false;
+        is_config_device = false;
         readonly = true;
         Debug_printf("Disk UNMOUNTED!!!!\r\n");
     }
 }
 
-bool iwmDisk::write_blank(fnFile *f, uint16_t sectorSize, uint16_t numSectors)
-{
-  
-  return false;
-}
-
 /**
- * Used for writing ProDOS images which exist in multiples of 
+ * Used for writing ProDOS images which exist in multiples of
  * 512 byte blocks.
  */
-bool iwmDisk::write_blank(fnFile *f, uint16_t numBlocks)
+bool iwmDisk::write_blank(fnFile *f, uint16_t numBlocks, uint8_t blank_header_type)
 {
   unsigned char buf[512];
 
   memset(&buf,0,sizeof(buf));
+
+  if (blank_header_type == 2) // DO
+  {
+    FILE *sf = fsFlash.file_open("/blank.do","rb");
+    if (!sf)
+    {
+      Debug_printf("Could not open /blank.do. Aborting.\n");
+      fclose(sf);
+      return true;
+    }
+
+    while (!feof(sf))
+    {
+      if (fread(buf,sizeof(unsigned char),sizeof(buf),sf) != sizeof(buf))
+      {
+        Debug_printf("Short read of blank.do, aborting.\n");
+        fclose(sf);
+        return true;
+      }
+      if (fnio::fwrite(buf,sizeof(unsigned char),sizeof(buf),f) != sizeof(buf))
+      {
+        Debug_printf("Short write to destination image. Aborting.\n");
+        fclose(sf);
+        return true;
+      }
+    }
+
+    fclose(sf);
+    Debug_printf("Creation of new DOS 3.3 disk successful.\n");
+    return false;
+  }
 
   if (blank_header_type == 1) // 2MG
   {
@@ -539,7 +567,7 @@ bool iwmDisk::write_blank(fnFile *f, uint16_t numBlocks)
       unsigned char id[4] = {'2','I','M','G'};
       unsigned char creator[4] = {'F','U','J','I'};
       unsigned short header_size = 0x40; // 64 bytes
-      unsigned short version = 0x01; 
+      unsigned short version = 0x01;
       unsigned long format = 0x01; // Prodos order
       unsigned long flags = 0x00;
       unsigned long numBlocks = 0;
@@ -565,7 +593,6 @@ bool iwmDisk::write_blank(fnFile *f, uint16_t numBlocks)
   fnio::fseek(f,offset,SEEK_SET);
   fnio::fwrite(&buf,sizeof(unsigned char),sizeof(buf),f);
 
-  blank_header_type = 0; // Reset to unadorned.
   return false;
 }
 

@@ -1,9 +1,20 @@
 name: Build FujiNet-PC
 
 on:
-  # push:
-  #   branches:
-  #     - "**"
+  push:
+    # Do not build tags. Do not build release branch
+    branches:
+      - "**"
+      - "!release"
+    tags:
+      - "!**"
+
+  pull_request:
+    # Do not build release branch
+    branches:
+      - "**"
+      - "!release"
+
   workflow_dispatch:
     inputs:
       # buildType:
@@ -41,12 +52,16 @@ jobs:
             runner: ubuntu-24.04
             target: ubuntu-24.04-amd64
             default-shell: bash
-          - name: macOS 13
-            target: macos-13
-            runner: macos-13
+          - name: macOS 15 ARM
+            target: macos-15-arm64
+            runner: macos-15
             default-shell: bash
-          - name: macOS 14
-            target: macos-14
+          - name: macOS 15 Intel
+            target: macos-15-x64
+            runner: macos-15-intel
+            default-shell: bash
+          - name: macOS 14 ARM
+            target: macos-14-arm64
             runner: macos-14
             default-shell: bash
           - name: Windows
@@ -64,6 +79,7 @@ jobs:
           - APPLE
           - ATARI
           - COCO
+          - RS232
 
     # continue-on-error: true
     name: "${{ matrix.os.name }}: Target ${{ matrix.fujinet_target }}"
@@ -186,7 +202,7 @@ jobs:
       with:
         name: fujinet-pc-${{ matrix.fujinet_target }}_${{ steps.version.outputs.fujinet }}_${{ matrix.os.target }}
         path: build/fujinet-pc-${{ matrix.fujinet_target }}_${{ steps.version.outputs.fujinet }}_${{ matrix.os.target }}.tar
-        
+
   release:
     if: ${{ github.event_name == 'schedule' || github.event.inputs.prepRelease == 'true' }}
     # Create GitHub release
@@ -202,13 +218,13 @@ jobs:
 
     - name: Display structure of downloaded files
       run: ls -lR release
-      
+
     - name: Zip release files
       working-directory: release
       run: |
         for D in fujinet-pc-*_*ubuntu* fujinet-pc-*_*macos*; do gzip -9v $D/fujinet-pc-*_*.tar; done
         for D in fujinet-pc-*_*windows*; do (cd $D; F=(fujinet-pc-*_*.tar); tar -xvf $F; rm -f $F; zip -r ${F%.*}.zip fujinet-pc-*); done
-        
+
     - name: Prepare Release Draft
       if: ${{ github.event.inputs.prepRelease == 'true' }}
       uses: softprops/action-gh-release@v2
@@ -229,7 +245,7 @@ jobs:
             FujiNet-PC **${{ needs.build.outputs.fujinet_version }}** nightly builds for: Apple 2, Atari 8-bit and Tandy Color Computer
             ⚠️ There is NO guarantee that these builds work!! ⚠️
           tag_name: nightly_fn_pc_${{ needs.build.outputs.fujinet_version }}
-          prerelease: true 
+          prerelease: true
           make_latest: false
           files: |
             release/fujinet-pc-*_*/fujinet-pc-*_*.tar.gz

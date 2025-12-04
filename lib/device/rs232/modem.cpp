@@ -1,6 +1,7 @@
 #ifdef BUILD_RS232
 
 #include "modem.h"
+#include "fujiCommandID.h"
 
 #include "../../../include/debug.h"
 #include "../../../include/atascii.h"
@@ -14,31 +15,6 @@
 #include "utils.h"
 
 #define RECVBUFSIZE 1024
-
-#define RS232_MODEMCMD_LOAD_RELOCATOR 0x21
-#define RS232_MODEMCMD_LOAD_HANDLER 0x26
-#define RS232_MODEMCMD_TYPE1_POLL 0x3F
-#define RS232_MODEMCMD_TYPE3_POLL 0x40
-#define RS232_MODEMCMD_CONTROL 0x41
-#define RS232_MODEMCMD_CONFIGURE 0x42
-#define RS232_MODEMCMD_SET_DUMP 0x44
-#define RS232_MODEMCMD_LISTEN 0x4C
-#define RS232_MODEMCMD_UNLISTEN 0x4D
-#define RS232_MODEMCMD_BAUDRATELOCK 0x4E
-#define RS232_MODEMCMD_AUTOANSWER 0x4F
-#define RS232_MODEMCMD_STATUS 0x53
-#define RS232_MODEMCMD_WRITE 0x57
-#define RS232_MODEMCMD_STREAM 0x58
-
-#define FIRMWARE_850RELOCATOR "/850relocator.bin"
-#define FIRMWARE_850HANDLER "/850handler.bin"
-
-/* Tested this delay several times on an 800 with Incognito
-   using HRS232 routines. Anything much lower gave inconsistent
-   firmware loading. Delay is unnoticeable when running at
-   normal speed.
-*/
-#define DELAY_FIRMWARE_DELIVERY 5000
 
 /**
  * List of Telnet options to process
@@ -60,7 +36,7 @@ static void _telnet_event_handler(telnet_t *telnet, telnet_event_t *ev, void *us
     switch (ev->type)
     {
     case TELNET_EV_DATA:
-        if (ev->data.size && fnUartBUS.write((uint8_t *)ev->data.buffer, ev->data.size) != ev->data.size)
+        if (ev->data.size && SYSTEM_BUS.write((uint8_t *)ev->data.buffer, ev->data.size) != ev->data.size)
             Debug_printf("_telnet_event_handler(%d) - Could not write complete buffer to RS232.\n", ev->type);
         break;
     case TELNET_EV_SEND:
@@ -114,177 +90,6 @@ rs232Modem::~rs232Modem()
     {
         telnet_free(telnet);
     }
-}
-
-// 0x40 / '@' - TYPE 3 POLL
-void rs232Modem::rs232_poll_3(uint8_t device, uint8_t aux1, uint8_t aux2)
-{
-    bool respond = false;
-
-    // When AUX1 and AUX == 0x4E, it's a normal/general poll
-    // Since XL/XE OS always does this during boot, we're going to ignore these, otherwise
-    // we'd load our handler every time, and that's probably not desireable
-    if (aux1 == 0 && aux2 == 0)
-    {
-        Debug_printf("MODEM TYPE 3 POLL #%d\n", ++count_PollType3);
-        if (count_PollType3 == 26)
-        {
-            //Debug_print("RESPONDING to poll #26\n");
-            //respond = true;
-        }
-        else
-            return;
-    }
-    // When AUX1 and AUX == 0x4F, it's a request to reset the whole polling process
-    if (aux1 == 0x4F && aux2 == 0x4F)
-    {
-        Debug_print("MODEM TYPE 3 POLL <<RESET POLL>>\n");
-        count_PollType3 = 0;
-        firmware_sent = false;
-        return;
-    }
-    // When AUX1 and AUX == 0x4E, it's a request to reset poll counters
-    if (aux1 == 0x4E && aux2 == 0x4E)
-    {
-        Debug_print("MODEM TYPE 3 POLL <<NULL POLL>>\n");
-        count_PollType3 = 0;
-        return;
-    }
-    // When AUX1 = 0x52 'R' and AUX == 1 or DEVICE == x050, it's a directed poll to "R1:"
-    if ((aux1 == 0x52 && aux2 == 0x01) || device == RS232_DEVICEID_RS232)
-    {
-        Debug_print("MODEM TYPE 4 \"R1:\" DIRECTED POLL\n");
-        respond = true;
-    }
-
-    // Get out if nothing above indicated we should respond to this poll
-    if (respond == false)
-        return;
-
-    // HACK TO GET IT TO COMPILE, TODO: FIX RS232
-    int filesize = 100;
-
-    // Simply return (without ACK) if we failed to get this
-    if (filesize < 0)
-        return;
-
-    Debug_println("Modem acknowledging Type 4 Poll");
-    rs232_ack();
-
-    // Acknowledge and return expected
-    uint16_t fsize = filesize;
-    uint8_t type4response[4];
-    type4response[0] = LOBYTE_FROM_UINT16(fsize);
-    type4response[1] = HIBYTE_FROM_UINT16(fsize);
-    type4response[2] = RS232_DEVICEID_RS232;
-    type4response[3] = 0;
-
-    fnSystem.delay_microseconds(DELAY_FIRMWARE_DELIVERY);
-
-    bus_to_computer(type4response, sizeof(type4response), false);
-
-    // TODO: Handle the subsequent request to load the handler properly by providing the relocation blocks
-}
-
-// 0x3F / '?' - TYPE 1 POLL
-void rs232Modem::rs232_poll_1()
-{
-    /*  From Altirra sources - rs232.cpp
-        Send back RS232 command for booting. This is a 12 uint8_t + chk block that
-        is meant to be written to the RS232 parameter block starting at DDEVIC ($0300).
-
-		The boot block MUST start at $0500. There are both BASIC-based and cart-based
-        loaders that use JSR $0506 to run the loader.
-    */
-
-    // According to documentation, we're only supposed to respond to this once
-    /*
-    if (count_PollType1 != 0)
-        return;
-    count_PollType1++;
-    */
-
-    // Get size of relocator
-    int filesize = fnSystem.load_firmware(FIRMWARE_850RELOCATOR, NULL);
-    // Simply return (without ACK) if we failed to get this
-    if (filesize < 0)
-        return;
-
-    // Acknoledge before continuing
-    rs232_ack();
-
-    uint8_t bootBlock[12] = {
-        0x50,       // DDEVIC
-        0x01,       // DUNIT
-        0x21,       // DCOMND = '!' (boot)
-        0x40,       // DSTATS
-        0x00, 0x05, // DBUFLO, DBUFHI == $0500
-        0x08,       // DTIMLO = 8 vblanks
-        0x00,       // not used
-        0x00, 0x00, // DBYTLO, DBYTHI
-        0x00,       // DAUX1
-        0x00,       // DAUX2
-    };
-
-    // Stuff the size into the block
-    uint32_t relsize = (uint32_t)filesize;
-    bootBlock[8] = (uint8_t)relsize;
-    bootBlock[9] = (uint8_t)(relsize >> 8);
-
-    Debug_println("Modem acknowledging Type 1 Poll");
-
-    fnSystem.delay_microseconds(DELAY_FIRMWARE_DELIVERY * 2);
-
-    bus_to_computer(bootBlock, sizeof(bootBlock), false);
-}
-
-// 0x21 / '!' - RELOCATOR DOWNLOAD
-// 0x26 / '&' - HANDLER DOWNLOAD
-void rs232Modem::rs232_send_firmware(uint8_t loadcommand)
-{
-    const char *firmware;
-    if (loadcommand == RS232_MODEMCMD_LOAD_RELOCATOR)
-    {
-        firmware = FIRMWARE_850RELOCATOR;
-    }
-    else
-    {
-        if (loadcommand == RS232_MODEMCMD_LOAD_HANDLER)
-        {
-            firmware = FIRMWARE_850HANDLER;
-        }
-        else
-            return;
-    }
-
-    // Load firmware from file
-    // HACK TO GET RS232 TO COMPILE, TODO: FIX RS232
-    uint8_t *code = NULL;
-    int codesize = 100;
-
-    // NAK if we failed to get this
-    if (codesize < 0 || code == NULL)
-    {
-        rs232_nak();
-        return;
-    }
-    // Acknoledge before continuing
-    rs232_ack();
-
-    // We need a delay here when working in high-speed mode.
-    // Doesn't negatively affect normal speed operation.
-    fnSystem.delay_microseconds(DELAY_FIRMWARE_DELIVERY);
-
-    // Send it
-
-    Debug_printf("Modem sending %d bytes of %s code\n", codesize,
-                 loadcommand == RS232_MODEMCMD_LOAD_RELOCATOR ? "relocator" : "handler");
-
-    bus_to_computer(code, codesize, false);
-
-    // Free the buffer!
-    free(code);
-    DTR = XMT = RTS = 0;
 }
 
 // 0x57 / 'W' - WRITE
@@ -421,7 +226,7 @@ void rs232Modem::rs232_control()
             tcpClient.stop(); // Hang up if DTR drops.
             CRX = false;
             cmdMode = true;
-            
+
             if (listenPort > 0)
             {
                 // tcpServer.stop();
@@ -445,14 +250,14 @@ void rs232Modem::rs232_config()
        4,5: Word size (00=5,01=6,10=7,11=8)
        3-0: Baud rate:
     */
-#define BAUD_300 0x8
-#define BAUD_600 0x9
-#define BAUD_1200 0xA
-#define BAUD_1800 0xB
-#define BAUD_2400 0xC
-#define BAUD_4800 0xD
-#define BAUD_9600 0xE
-#define BAUD_19200 0xF
+#define SIO_BAUD_300 0x8
+#define SIO_BAUD_600 0x9
+#define SIO_BAUD_1200 0xA
+#define SIO_BAUD_1800 0xB
+#define SIO_BAUD_2400 0xC
+#define SIO_BAUD_4800 0xD
+#define SIO_BAUD_9600 0xE
+#define SIO_BAUD_19200 0xF
     /*
        AUX2:
        7-3: NA
@@ -473,28 +278,28 @@ void rs232Modem::rs232_config()
 
     switch (newBaud)
     {
-    case BAUD_300:
+    case SIO_BAUD_300:
         modemBaud = 300;
         break;
-    case BAUD_600:
+    case SIO_BAUD_600:
         modemBaud = 600;
         break;
-    case BAUD_1200:
+    case SIO_BAUD_1200:
         modemBaud = 1200;
         break;
-    case BAUD_1800:
+    case SIO_BAUD_1800:
         modemBaud = 1800;
         break;
-    case BAUD_2400:
+    case SIO_BAUD_2400:
         modemBaud = 2400;
         break;
-    case BAUD_4800:
+    case SIO_BAUD_4800:
         modemBaud = 4800;
         break;
-    case BAUD_9600:
+    case SIO_BAUD_9600:
         modemBaud = 9600;
         break;
-    case BAUD_19200:
+    case SIO_BAUD_19200:
         modemBaud = 19200;
         break;
     default:
@@ -524,7 +329,7 @@ void rs232Modem::rs232_stream()
       RESPONSE
       Payload: 9 bytes to configure POKEY baud rate ($D200-$D208)
     */
-    char response[] = {0x28, 0xA0, 0x00, 0xA0, 0x28, 0xA0, 0x00, 0xA0, 0x78}; // 19200
+    uint8_t response[] = {0x28, 0xA0, 0x00, 0xA0, 0x28, 0xA0, 0x00, 0xA0, 0x78}; // 19200
 
     switch (modemBaud)
     {
@@ -564,7 +369,7 @@ void rs232Modem::rs232_stream()
 
     bus_to_computer((uint8_t *)response, sizeof(response), false);
 
-    fnUartBUS.set_baudrate(modemBaud);
+    SYSTEM_BUS.setBaudrate(modemBaud);
     modemActive = true;
     Debug_printf("Modem streaming at %u baud\n", modemBaud);
 }
@@ -611,7 +416,7 @@ void rs232Modem::rs232_baudlock()
 {
     rs232_ack();
     baudLock = (cmdFrame.aux1 > 0 ? true : false);
-    modemBaud = rs232_get_aux();
+    modemBaud = rs232_get_aux16_lo();
 
     Debug_printf("baudLock: %d\n", baudLock);
 
@@ -658,8 +463,8 @@ void rs232Modem::at_connect_resultCode(int modemBaud)
         resultCode = 1;
         break;
     }
-    fnUartBUS.print(resultCode);
-    fnUartBUS.write(ASCII_CR);
+    SYSTEM_BUS.print(resultCode);
+    SYSTEM_BUS.write(ASCII_CR);
 }
 
 /**
@@ -668,9 +473,9 @@ void rs232Modem::at_connect_resultCode(int modemBaud)
  */
 void rs232Modem::at_cmd_resultCode(int resultCode)
 {
-    fnUartBUS.print(resultCode);
-    fnUartBUS.write(ASCII_CR);
-    fnUartBUS.write(ASCII_LF);
+    SYSTEM_BUS.print(resultCode);
+    SYSTEM_BUS.write(ASCII_CR);
+    SYSTEM_BUS.write(ASCII_LF);
 }
 
 /**
@@ -683,14 +488,14 @@ void rs232Modem::at_cmd_println()
 
     if (cmdAtascii == true)
     {
-        fnUartBUS.write(ATASCII_EOL);
+        SYSTEM_BUS.write(ATASCII_EOL);
     }
     else
     {
-        fnUartBUS.write(ASCII_CR);
-        fnUartBUS.write(ASCII_LF);
+        SYSTEM_BUS.write(ASCII_CR);
+        SYSTEM_BUS.write(ASCII_LF);
     }
-    fnUartBUS.flush();
+    SYSTEM_BUS.flushOutput();
 }
 
 void rs232Modem::at_cmd_println(const char *s, bool addEol)
@@ -698,20 +503,20 @@ void rs232Modem::at_cmd_println(const char *s, bool addEol)
     if (cmdOutput == false)
         return;
 
-    fnUartBUS.print(s);
+    SYSTEM_BUS.print(s);
     if (addEol)
     {
         if (cmdAtascii == true)
         {
-            fnUartBUS.write(ATASCII_EOL);
+            SYSTEM_BUS.write(ATASCII_EOL);
         }
         else
         {
-            fnUartBUS.write(ASCII_CR);
-            fnUartBUS.write(ASCII_LF);
+            SYSTEM_BUS.write(ASCII_CR);
+            SYSTEM_BUS.write(ASCII_LF);
         }
     }
-    fnUartBUS.flush();
+    SYSTEM_BUS.flushOutput();
 }
 
 void rs232Modem::at_cmd_println(int i, bool addEol)
@@ -719,20 +524,20 @@ void rs232Modem::at_cmd_println(int i, bool addEol)
     if (cmdOutput == false)
         return;
 
-    fnUartBUS.print(i);
+    SYSTEM_BUS.print(i);
     if (addEol)
     {
         if (cmdAtascii == true)
         {
-            fnUartBUS.write(ATASCII_EOL);
+            SYSTEM_BUS.write(ATASCII_EOL);
         }
         else
         {
-            fnUartBUS.write(ASCII_CR);
-            fnUartBUS.write(ASCII_LF);
+            SYSTEM_BUS.write(ASCII_CR);
+            SYSTEM_BUS.write(ASCII_LF);
         }
     }
-    fnUartBUS.flush();
+    SYSTEM_BUS.flushOutput();
 }
 
 void rs232Modem::at_cmd_println(std::string s, bool addEol)
@@ -740,20 +545,20 @@ void rs232Modem::at_cmd_println(std::string s, bool addEol)
     if (cmdOutput == false)
         return;
 
-    fnUartBUS.print(s);
+    SYSTEM_BUS.print(s);
     if (addEol)
     {
         if (cmdAtascii == true)
         {
-            fnUartBUS.write(ATASCII_EOL);
+            SYSTEM_BUS.write(ATASCII_EOL);
         }
         else
         {
-            fnUartBUS.write(ASCII_CR);
-            fnUartBUS.write(ASCII_LF);
+            SYSTEM_BUS.write(ASCII_CR);
+            SYSTEM_BUS.write(ASCII_LF);
         }
     }
-    fnUartBUS.flush();
+    SYSTEM_BUS.flushOutput();
 }
 
 void rs232Modem::at_handle_wificonnect()
@@ -1011,7 +816,7 @@ void rs232Modem::at_handle_answer()
     Debug_printf("HANDLE ANSWER !!!\n");
     if (tcpServer.hasClient())
     {
-        tcpClient = tcpServer.available();
+        tcpClient = tcpServer.client();
         tcpClient.setNoDelay(true); // try to disable naggle
                                     //        tcpServer.stop();
         answerTimer = fnSystem.millis();
@@ -1019,7 +824,7 @@ void rs232Modem::at_handle_answer()
         CRX = true;
 
         cmdMode = false;
-        fnUartBUS.flush();
+        SYSTEM_BUS.flushOutput();
         answerHack = false;
     }
 }
@@ -1470,8 +1275,8 @@ void rs232Modem::modemCommand()
         break;
     case AT_CPM:
         modemActive = false;
-        RS232.getCPM()->init_cpm(modemBaud);
-        RS232.getCPM()->cpmActive = true;
+        SYSTEM_BUS.getCPM()->init_cpm(modemBaud);
+        SYSTEM_BUS.getCPM()->cpmActive = true;
         break;
     case AT_PHONEBOOKLIST:
         at_handle_pblist();
@@ -1563,11 +1368,11 @@ void rs232Modem::rs232_handle_modem()
 
         // In command mode - don't exchange with TCP but gather characters to a string
         //if (RS232_UART.available() /*|| blockWritePending == true */ )
-        if (fnUartBUS.available() > 0)
+        if (SYSTEM_BUS.available() > 0)
         {
             // get char from Atari RS232
             //char chr = RS232_UART.read();
-            char chr = fnUartBUS.read();
+            uint8_t chr = SYSTEM_BUS.read();
 
             // Return, enter, new line, carriage return.. anything goes to end the command
             if ((chr == ASCII_LF) || (chr == ASCII_CR) || (chr == ATASCII_EOL))
@@ -1592,9 +1397,9 @@ void rs232Modem::rs232_handle_modem()
                     // Clear with a space
                     if (commandEcho == true)
                     {
-                        fnUartBUS.write(ASCII_BACKSPACE);
-                        fnUartBUS.write(' ');
-                        fnUartBUS.write(ASCII_BACKSPACE);
+                        SYSTEM_BUS.write(ASCII_BACKSPACE);
+                        SYSTEM_BUS.write(' ');
+                        SYSTEM_BUS.write(ASCII_BACKSPACE);
                     }
                 }
             }
@@ -1607,7 +1412,7 @@ void rs232Modem::rs232_handle_modem()
                 {
                     cmd.erase(len - 1);
                     if (commandEcho == true)
-                        fnUartBUS.write(ATASCII_BACKSPACE);
+                        SYSTEM_BUS.write(ATASCII_BACKSPACE);
                 }
             }
             // Take into account arrow key movement and clear screen
@@ -1615,7 +1420,7 @@ void rs232Modem::rs232_handle_modem()
                      ((chr >= ATASCII_CURSOR_UP) && (chr <= ATASCII_CURSOR_RIGHT)))
             {
                 if (commandEcho == true)
-                    fnUartBUS.write(chr);
+                    SYSTEM_BUS.write(chr);
             }
             else
             {
@@ -1625,7 +1430,7 @@ void rs232Modem::rs232_handle_modem()
                     cmd += chr;
                 }
                 if (commandEcho == true)
-                    fnUartBUS.write(chr);
+                    SYSTEM_BUS.write(chr);
             }
         }
     }
@@ -1656,8 +1461,8 @@ void rs232Modem::rs232_handle_modem()
             }
         }
 
-        int rs232BytesAvail = fnUartBUS.available();
-        //int rs232BytesAvail = std::min(0, fnUartBUS.available());
+        int rs232BytesAvail = SYSTEM_BUS.available();
+        //int rs232BytesAvail = std::min(0, SYSTEM_BUS.available());
 
         // send from Atari to Fujinet
         if (rs232BytesAvail && tcpClient.connected())
@@ -1672,8 +1477,8 @@ void rs232Modem::rs232_handle_modem()
 
             // Read from serial, the amount available up to
             // maximum size of the buffer
-            int rs232BytesRead = fnUartBUS.readBytes(&txBuf[0], //RS232_UART.readBytes(&txBuf[0],
-                                                   (rs232BytesAvail > TX_BUF_SIZE) ? TX_BUF_SIZE : rs232BytesAvail);
+            int rs232BytesRead = SYSTEM_BUS.read(&txBuf[0], (rs232BytesAvail > TX_BUF_SIZE)
+                                                 ? TX_BUF_SIZE : rs232BytesAvail);
 
             // Disconnect if going to AT mode with "+++" sequence
             for (int i = 0; i < (int)rs232BytesRead; i++)
@@ -1722,8 +1527,8 @@ void rs232Modem::rs232_handle_modem()
             }
             else
             {
-                fnUartBUS.write(buf, bytesRead);
-                fnUartBUS.flush();
+                SYSTEM_BUS.write(buf, bytesRead);
+                SYSTEM_BUS.flushOutput();
             }
 
             // And dump to sniffer, if enabled.
@@ -1741,7 +1546,7 @@ void rs232Modem::rs232_handle_modem()
             Debug_println("Going back to command mode");
 
             at_cmd_println("OK");
-    
+
             cmdMode = true;
 
             plusCount = 0;
@@ -1797,76 +1602,52 @@ void rs232Modem::shutdown()
 /*
   Process command
 */
-void rs232Modem::rs232_process(uint32_t commanddata, uint8_t checksum)
+void rs232Modem::rs232_process(cmdFrame_t *cmd_ptr)
 {
-    cmdFrame.commanddata = commanddata;
-    cmdFrame.checksum = checksum;
-
     if (!Config.get_modem_enabled())
+    {
         Debug_println("rs232Modem::disabled, ignoring");
+    }
     else
     {
         Debug_println("rs232Modem::rs232_process() called");
 
+        cmdFrame = *cmd_ptr;
         switch (cmdFrame.comnd)
         {
-        case RS232_MODEMCMD_LOAD_RELOCATOR:
-            Debug_printf("MODEM $21 RELOCATOR #%d\n", ++count_ReqRelocator);
-            rs232_send_firmware(cmdFrame.comnd);
-            break;
-
-        case RS232_MODEMCMD_LOAD_HANDLER:
-            Debug_printf("MODEM $26 HANDLER DL #%d\n", ++count_ReqHandler);
-            rs232_send_firmware(cmdFrame.comnd);
-            break;
-
-        case RS232_MODEMCMD_TYPE1_POLL:
-            Debug_printf("MODEM TYPE 1 POLL #%d\n", ++count_PollType1);
-            // The 850 is only supposed to respond to this if AUX1 = 1 or on the 26th poll attempt
-            if (cmdFrame.aux1 == 1 || count_PollType1 == 16)
-            {
-                rs232_poll_1();
-                count_PollType1 = 0; // Reset the counter so we can respond again if asked
-            }
-            break;
-
-        case RS232_MODEMCMD_TYPE3_POLL:
-            rs232_poll_3(cmdFrame.device, cmdFrame.aux1, cmdFrame.aux2);
-            break;
-
-        case RS232_MODEMCMD_CONTROL:
+        case FUJICMD_CONTROL:
             rs232_ack();
             rs232_control();
             break;
-        case RS232_MODEMCMD_CONFIGURE:
+        case FUJICMD_CONFIGURE:
             rs232_ack();
             rs232_config();
             break;
-        case RS232_MODEMCMD_SET_DUMP:
+        case FUJICMD_SET_DUMP:
             rs232_ack();
             rs232_set_dump();
             break;
-        case RS232_MODEMCMD_LISTEN:
+        case FUJICMD_LISTEN:
             rs232_listen();
             break;
-        case RS232_MODEMCMD_UNLISTEN:
+        case FUJICMD_UNLISTEN:
             rs232_unlisten();
             break;
-        case RS232_MODEMCMD_BAUDRATELOCK:
+        case FUJICMD_BAUDRATELOCK:
             rs232_baudlock();
             break;
-        case RS232_MODEMCMD_AUTOANSWER:
+        case FUJICMD_AUTOANSWER:
             rs232_autoanswer();
             break;
-        case RS232_MODEMCMD_STATUS:
+        case FUJICMD_STATUS:
             rs232_ack();
             rs232_status();
             break;
-        case RS232_MODEMCMD_WRITE:
+        case FUJICMD_WRITE:
             rs232_ack();
             rs232_write();
             break;
-        case RS232_MODEMCMD_STREAM:
+        case FUJICMD_STREAM:
             rs232_ack();
             rs232_stream();
             break;

@@ -5,6 +5,8 @@
  */
 
 #include "network.h"
+#include "../network.h"
+#include "fuji_endian.h"
 
 #include <cstring>
 #include <algorithm>
@@ -16,15 +18,7 @@
 #include "utils.h"
 
 #include "status_error_codes.h"
-#include "TCP.h"
-#include "UDP.h"
-#include "Test.h"
-#include "Telnet.h"
-#include "TNFS.h"
-#include "FTP.h"
-#include "HTTP.h"
-#include "SSH.h"
-#include "SMB.h"
+#include "Protocol.h"
 
 using namespace std;
 
@@ -117,7 +111,7 @@ void drivewireNetwork::timer_stop()
 
 void drivewireNetwork::ready()
 {
-    fnDwCom.write(0x01); // yes, ready.
+    SYSTEM_BUS.write(0x01); // yes, ready.
 }
 
 /**
@@ -127,23 +121,23 @@ void drivewireNetwork::ready()
  */
 void drivewireNetwork::open()
 {
-    Debug_printf("drivewireNetwork::sio_open(%02x,%02x)\n",cmdFrame.aux1,cmdFrame.aux2);
+    Debug_printf("drivewireNetwork::open(%02x,%02x)\n",cmdFrame.aux1,cmdFrame.aux2);
 
     char tmp[256];
-    memset(tmp,0,sizeof(tmp));
 
-    size_t bytes_read = fnDwCom.readBytes((uint8_t *)tmp, 256);
+    size_t bytes_read = SYSTEM_BUS.read((uint8_t *)tmp, 256);
+    tmp[sizeof(tmp)-1] = '\0';
 
     Debug_printf("tmp = %s\n",tmp);
 
     if (bytes_read != 256)
     {
-        Debug_printf("Short read of %lu bytes. Exiting.",bytes_read);
+        Debug_printf("Short read of %u bytes. Exiting.", bytes_read);
         return;
     }
 
-    deviceSpec = std::string(tmp,256);
-    
+    deviceSpec = std::string(tmp);
+
     channelMode = PROTOCOL;
 
     // Delete timer if already extant.
@@ -183,7 +177,7 @@ void drivewireNetwork::open()
             delete protocolParser;
             protocolParser = nullptr;
         }
-        //fnDwCom.write(ns.error);
+        //SYSTEM_BUS.write(ns.error);
         return;
     }
 
@@ -202,7 +196,7 @@ void drivewireNetwork::open()
             delete protocolParser;
             protocolParser = nullptr;
         }
-        //fnDwCom.write(ns.error);
+        //SYSTEM_BUS.write(ns.error);
         return;
     }
 
@@ -220,7 +214,7 @@ void drivewireNetwork::open()
 
     // And signal complete!
     ns.error = 1;
-    //fnDwCom.write(ns.error);
+    //SYSTEM_BUS.write(ns.error);
     Debug_printf("ns.error = %u\n",ns.error);
 }
 
@@ -230,7 +224,7 @@ void drivewireNetwork::open()
  */
 void drivewireNetwork::close()
 {
-    Debug_printf("drivewireNetwork::sio_close()\n");
+    Debug_printf("drivewireNetwork::close()\n");
 
     ns.reset();
 
@@ -243,7 +237,7 @@ void drivewireNetwork::close()
     // If no protocol enabled, we just signal complete, and return.
     if (protocol == nullptr)
     {
-        //fnDwCom.write(ns.error);
+        //SYSTEM_BUS.write(ns.error);
         return;
     }
 
@@ -266,8 +260,8 @@ void drivewireNetwork::close()
 #ifdef ESP_PLATFORM
     Debug_printv("After protocol delete %lu\n",esp_get_free_internal_heap_size());
 #endif
-    
-    //fnDwCom.write(ns.error);
+
+    //SYSTEM_BUS.write(ns.error);
 }
 
 /**
@@ -316,7 +310,7 @@ void drivewireNetwork::read()
 
     // And set response buffer.
     response += *receiveBuffer;
- 
+
     // Remove from receive buffer and shrink.
     receiveBuffer->erase(0, num_bytes);
     receiveBuffer->shrink_to_fit();
@@ -377,18 +371,18 @@ void drivewireNetwork::write()
 
     if (!txbuf)
     {
-        Debug_printf("drivewireNetwork::write() - could not allocate %u bytes.\n");
+        Debug_printf("drivewireNetwork::write() - could not allocate %u bytes.\n", num_bytes);
         return;
     }
 
-    if (fnDwCom.readBytes((uint8_t *)txbuf, num_bytes) < num_bytes)
+    if (SYSTEM_BUS.read((uint8_t *)txbuf, num_bytes) < num_bytes)
     {
         Debug_printf("drivewireNetwork::write() - short read\n");
         free(txbuf);
         return;
     }
 
-    Debug_printf("sioNetwork::drivewire_write( %u bytes)\n", num_bytes);
+    Debug_printf("drivewireNetwork::drivewire_write( %u bytes)\n", num_bytes);
 
     // If protocol isn't connected, then return not connected.
     if (protocol == nullptr)
@@ -457,7 +451,8 @@ void drivewireNetwork::status_local()
     uint8_t ipNetmask[4];
     uint8_t ipGateway[4];
     uint8_t ipDNS[4];
-    uint8_t default_status[4] = {0, 0, 0, 0};
+    NDeviceStatus status {};
+
 
     Debug_printf("drivewireNetwork::sio_status_local(%u)\n", cmdFrame.aux2);
 
@@ -468,38 +463,34 @@ void drivewireNetwork::status_local()
     {
     case 1: // IP Address
         Debug_printf("IP Address: %u.%u.%u.%u\n", ipAddress[0], ipAddress[1], ipAddress[2], ipAddress[3]);
-        memcpy(default_status,ipAddress,sizeof(default_status));
+        memcpy(&status,ipAddress,sizeof(status));
         break;
     case 2: // Netmask
         Debug_printf("Netmask: %u.%u.%u.%u\n", ipNetmask[0], ipNetmask[1], ipNetmask[2], ipNetmask[3]);
-        memcpy(default_status,ipNetmask,sizeof(default_status));
+        memcpy(&status,ipNetmask,sizeof(status));
         break;
     case 3: // Gatway
         Debug_printf("Gateway: %u.%u.%u.%u\n", ipGateway[0], ipGateway[1], ipGateway[2], ipGateway[3]);
-        memcpy(default_status,ipGateway,sizeof(default_status));
+        memcpy(&status,ipGateway,sizeof(status));
         break;
     case 4: // DNS
         Debug_printf("DNS: %u.%u.%u.%u\n", ipDNS[0], ipDNS[1], ipDNS[2], ipDNS[3]);
-        memcpy(default_status,ipDNS,sizeof(default_status));
+        memcpy(&status,ipDNS,sizeof(status));
         break;
     default:
-        default_status[2] = ns.connected;
-        default_status[3] = ns.error;
+        status.conn = ns.connected;
+        status.err = ns.error;
         break;
     }
 
     response.clear();
-    response += default_status[0];
-    response += default_status[1];
-    response += default_status[2];
-    response += default_status[3];
+    response.append((char *) &status, sizeof(status));
 }
 
 bool drivewireNetwork::status_channel_json(NetworkStatus *ns)
 {
     ns->connected = json_bytes_remaining > 0;
     ns->error = json_bytes_remaining > 0 ? 1 : 136;
-    ns->rxBytesWaiting = json_bytes_remaining;
     return false; // for now
 }
 
@@ -508,7 +499,8 @@ bool drivewireNetwork::status_channel_json(NetworkStatus *ns)
  */
 void drivewireNetwork::status_channel()
 {
-    uint8_t serialized_status[4] = {0, 0, 0, 0};
+    NDeviceStatus status;
+    size_t avail = 0;
 
     Debug_printf("drivewireNetwork::sio_status_channel(%u)\n", channelMode);
 
@@ -520,33 +512,31 @@ void drivewireNetwork::status_channel()
             ns.error = true;
         } else {
             protocol->status(&ns);
+            avail = protocol->available();
         }
         break;
     case JSON:
         status_channel_json(&ns);
+        avail = json_bytes_remaining;
         break;
     }
     // clear forced flag (first status after open)
     protocol->forceStatus = false;
 
-    // Serialize status into status bytes (rxBytesWaiting sent big endian!)
-    serialized_status[0] = ns.rxBytesWaiting >> 8;
-    serialized_status[1] = ns.rxBytesWaiting & 0xFF;
-    serialized_status[2] = ns.connected;
-    serialized_status[3] = ns.error;
+    avail = avail > 65535 ? 65535 : avail;
+    status.avail = htobe16(avail);
+    status.conn = ns.connected;
+    status.err = ns.error;
 
-    Debug_printf("sio_status_channel() - BW: %u C: %u E: %u\n",
-                 ns.rxBytesWaiting, ns.connected, ns.error);
-
-    Debug_printf("%02X %02X %02X %02X\n",serialized_status[0],serialized_status[1],serialized_status[2],serialized_status[3]);
+#if 1 //def TOO_MUCH_DEBUG
+    Debug_printf("status_channel() - BW: %u C: %u E: %u\n",
+                 avail, ns.connected, ns.error);
+#endif /* TOO_MUCH_DEBUG */
 
     // and fill response.
     response.clear();
     response.shrink_to_fit();
-    response += serialized_status[0];
-    response += serialized_status[1];
-    response += serialized_status[2];
-    response += serialized_status[3];
+    response.append((char *) &status, sizeof(status));
 }
 
 /**
@@ -569,24 +559,24 @@ void drivewireNetwork::set_prefix()
     std::string prefixSpec_str;
     char tmp[256];
     memset(tmp,0,sizeof(tmp));
-    size_t read_bytes = fnDwCom.readBytes((uint8_t *)tmp, 256);
+    size_t read_bytes = SYSTEM_BUS.read((uint8_t *)tmp, 256);
 
     if (read_bytes != 256)
     {
-        Debug_printf("Short read by %lu bytes. Exiting.",read_bytes);
+        Debug_printf("Short read by %u bytes. Exiting.", read_bytes);
         return;
     }
 
     prefixSpec_str = string((const char *)tmp);
     prefixSpec_str = prefixSpec_str.substr(prefixSpec_str.find_first_of(":") + 1);
-    Debug_printf("sioNetwork::sio_set_prefix(%s)\n", prefixSpec_str.c_str());
+    Debug_printf("drivewireNetwork::set_prefix(%s)\n", prefixSpec_str.c_str());
 
     // If "NCD Nn:" then prefix is cleared completely
     if (prefixSpec_str.empty())
     {
         prefix.clear();
     }
-    else 
+    else
     {
         // For the remaining cases, append trailing slash if not found
         if (prefix[prefix.size()-1] != '/')
@@ -666,16 +656,16 @@ void drivewireNetwork::set_login()
     char tmp[256];
     memset(tmp,0,sizeof(tmp));
 
-    size_t bytes_read = fnDwCom.readBytes((uint8_t *)tmp, 256);
+    size_t bytes_read = SYSTEM_BUS.read((uint8_t *)tmp, 256);
 
     if (bytes_read != 256)
     {
-        Debug_printf("Short read of %lu bytes. Exiting.\n",bytes_read);
+        Debug_printf("Short read of %u bytes. Exiting.\n", bytes_read);
         return;
     }
 
-    login = std::string(tmp,256);    
-    
+    login = std::string(tmp,256);
+
     Debug_printf("drivewireNetwork::set_login(%s)\n",login.c_str());
 }
 
@@ -687,17 +677,17 @@ void drivewireNetwork::set_password()
     char tmp[256];
     memset(tmp,0,sizeof(tmp));
 
-    size_t bytes_read = fnDwCom.readBytes((uint8_t *)tmp, 256);
+    size_t bytes_read = SYSTEM_BUS.read((uint8_t *)tmp, 256);
 
     if (bytes_read != 256)
     {
-        Debug_printf("Short read of %lu bytes. Exiting.\n",bytes_read);
+        Debug_printf("Short read of %u bytes. Exiting.\n", bytes_read);
         return;
     }
 
     password = std::string(tmp,256);
 
-    Debug_printf("drivewireNetwork::set_password(%s)\n",password.c_str());
+    Debug_printf("drivewireNetwork::set_password(%s)\n", password.c_str());
 }
 
 /**
@@ -708,7 +698,7 @@ void drivewireNetwork::set_password()
  */
 void drivewireNetwork::special()
 {
-    do_inquiry(cmdFrame.comnd);
+    do_inquiry((fujiCommandID_t) cmdFrame.comnd);
 
     switch (inq_dstats)
     {
@@ -736,13 +726,13 @@ void drivewireNetwork::special_inquiry()
 {
     Debug_printf("drivewireNetwork::special_inquiry(%02x)\n", cmdFrame.aux1);
 
-    do_inquiry(cmdFrame.aux1);
+    do_inquiry((fujiCommandID_t) cmdFrame.aux1);
 
     // Finally, return the completed inq_dstats value back to CoCo
-    fnDwCom.write(&inq_dstats, sizeof(inq_dstats));
+    SYSTEM_BUS.write(&inq_dstats, sizeof(inq_dstats));
 }
 
-void drivewireNetwork::do_inquiry(unsigned char inq_cmd)
+void drivewireNetwork::do_inquiry(fujiCommandID_t inq_cmd)
 {
     // Reset inq_dstats
     inq_dstats = 0xff;
@@ -857,7 +847,6 @@ void drivewireNetwork::special_40()
 void drivewireNetwork::special_80()
 {
     uint8_t spData[SPECIAL_BUFFER_SIZE];
-    int i=0;
 
     // Handle commands that exist outside of an open channel.
     switch (cmdFrame.comnd)
@@ -889,7 +878,7 @@ void drivewireNetwork::special_80()
 
     // Get special (devicespec) from computer
 
-    fnDwCom.readBytes(spData,256);
+    SYSTEM_BUS.read(spData,256);
 
     Debug_printf("drivewireNetwork::special_80() - %s\n", spData);
 
@@ -914,56 +903,12 @@ void drivewireNetwork::special_80()
  */
 bool drivewireNetwork::instantiate_protocol()
 {
-    if (urlParser == nullptr)
+    if (!protocolParser)
     {
-        Debug_printf("drivewireNetwork::open_protocol() - urlParser is NULL. Aborting.\n");
-        return false; // error.
+        protocolParser = new ProtocolParser();
     }
 
-    // Convert to uppercase
-    transform(urlParser->scheme.begin(), urlParser->scheme.end(), urlParser->scheme.begin(), ::toupper);
-
-    if (urlParser->scheme == "TCP")
-    {
-        protocol = new NetworkProtocolTCP(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else if (urlParser->scheme == "UDP")
-    {
-        protocol = new NetworkProtocolUDP(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else if (urlParser->scheme == "TEST")
-    {
-        protocol = new NetworkProtocolTest(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else if (urlParser->scheme == "TELNET")
-    {
-        protocol = new NetworkProtocolTELNET(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else if (urlParser->scheme == "TNFS")
-    {
-        protocol = new NetworkProtocolTNFS(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else if (urlParser->scheme == "FTP")
-    {
-        protocol = new NetworkProtocolFTP(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else if (urlParser->scheme == "HTTP" || urlParser->scheme == "HTTPS")
-    {
-        protocol = new NetworkProtocolHTTP(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else if (urlParser->scheme == "SSH")
-    {
-        protocol = new NetworkProtocolSSH(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else if (urlParser->scheme == "SMB")
-    {
-        protocol = new NetworkProtocolSMB(receiveBuffer, transmitBuffer, specialBuffer);
-    }
-    else
-    {
-        Debug_printf("Invalid protocol: %s\n", urlParser->scheme.c_str());
-        return false; // invalid protocol.
-    }
+    protocol = protocolParser->createProtocol(urlParser->scheme, receiveBuffer, transmitBuffer, specialBuffer, &login, &password);
 
     if (protocol == nullptr)
     {
@@ -1023,7 +968,7 @@ void drivewireNetwork::poll_interrupt()
         protocol->status(&ns);
         protocol->fromInterrupt = false;
 
-        if (ns.rxBytesWaiting > 0 || ns.connected == 0)
+        if (protocol->available() > 0 || ns.connected == 0)
             assert_interrupt();
 #ifndef ESP_PLATFORM
 else
@@ -1040,7 +985,7 @@ else
 void drivewireNetwork::send_error()
 {
     Debug_printf("drivewireNetwork::send_error(%u)\n",ns.error);
-    fnDwCom.write(ns.error);
+    SYSTEM_BUS.write(ns.error);
 }
 
 void drivewireNetwork::send_response()
@@ -1052,7 +997,7 @@ void drivewireNetwork::send_response()
         response.insert(response.length(), len - response.length(), '\0');
 
     // Send body
-    fnDwCom.write((uint8_t *)response.c_str(), len);
+    SYSTEM_BUS.write((uint8_t *)response.c_str(), len);
 
     Debug_printf("drivewireNetwork::send_response[%d]:%s\n", len, response.c_str());
 
@@ -1105,7 +1050,7 @@ void drivewireNetwork::parse_and_instantiate_protocol()
         Debug_printf("Could not open protocol. spec: >%s<, url: >%s<\n", deviceSpec.c_str(), urlParser->mRawUrl.c_str());
         ns.error = NETWORK_ERROR_GENERAL;
         return;
-    }  
+    }
 }
 
 /**
@@ -1227,12 +1172,12 @@ void drivewireNetwork::json_query()
     char tmpq[256];
     memset(tmpq,0,sizeof(tmpq));
 
-    size_t bytes_read = fnDwCom.readBytes((uint8_t *)tmpq,256);
+    size_t bytes_read = SYSTEM_BUS.read((uint8_t *)tmpq,256);
 
     // why does it need to be 256 bytes?
     if (bytes_read != 256)
     {
-        Debug_printf("Short read of %lu bytes. Exiting\n",bytes_read);
+        Debug_printf("Short read of %u bytes. Exiting\n", bytes_read);
         return;
     }
 
@@ -1250,7 +1195,7 @@ void drivewireNetwork::json_query()
 
     // Query param is only used in ATARI at the moment, and 256 is too large for the type.
     json->setReadQuery(in_string, 0);
-    json_bytes_remaining = json->json_bytes_remaining;
+    json_bytes_remaining = json->available();
 
     std::vector<uint8_t> tmp(json_bytes_remaining);
     json->readValue(tmp.data(), json_bytes_remaining);
@@ -1260,8 +1205,8 @@ void drivewireNetwork::json_query()
     *receiveBuffer += std::string(tmp.begin(), null_pos);
 
     for (int i=0;i<in_string.length();i++)
-        Debug_printf("%02X ",in_string[i]);
-    
+        Debug_printf("%02X ",(unsigned char)in_string[i]);
+
     Debug_printf("\n");
 
     Debug_printf("Query set to >%s<\r\n", in_string.c_str());
@@ -1295,12 +1240,12 @@ void drivewireNetwork::do_idempotent_command_80()
 void drivewireNetwork::process()
 {
     // Read the three command and aux bytes
-    cmdFrame.comnd = (uint8_t)fnDwCom.read();
-    cmdFrame.aux1 = (uint8_t)fnDwCom.read();
-    cmdFrame.aux2 = (uint8_t)fnDwCom.read();
+    cmdFrame.comnd = (uint8_t)SYSTEM_BUS.read();
+    cmdFrame.aux1 = (uint8_t)SYSTEM_BUS.read();
+    cmdFrame.aux2 = (uint8_t)SYSTEM_BUS.read();
 
     Debug_printf("comnd: '%c' %u,%u,%u\n",cmdFrame.comnd,cmdFrame.comnd,cmdFrame.aux1,cmdFrame.aux2);
-    
+
     switch (cmdFrame.comnd)
     {
     case 0x00: // Ready?

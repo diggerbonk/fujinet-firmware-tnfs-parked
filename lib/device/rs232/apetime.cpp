@@ -3,9 +3,14 @@
 #include "apetime.h"
 
 #include <cstring>
+#include <ctime>
 
 #include "../../include/debug.h"
 
+#ifdef _WIN32
+#define setenv(name, value, overwrite) _putenv_s(name, value)
+#define unsetenv(name) _putenv_s(name, "")
+#endif /* _WIN32 */
 
 #define RS232_APETIMECMD_GETTIME 0x93
 #define RS232_APETIMECMD_SETTZ 0x99
@@ -66,7 +71,7 @@ void rs232ApeTime::_rs232_set_tz()
       free(ape_timezone);
     }
 
-    bufsz = rs232_get_aux();
+    bufsz = rs232_get_aux16_lo();
     if (bufsz > 0) {
       ape_timezone = (char *) malloc((bufsz + 1) * sizeof(char));
 
@@ -78,18 +83,16 @@ void rs232ApeTime::_rs232_set_tz()
 
         rs232_complete();
 
-        Debug_printf("TZ set to <%s>\n", ape_timezone); 
+        Debug_printf("TZ set to <%s>\n", ape_timezone);
       }
     } else {
       Debug_printf("TZ unset\n");
     }
 }
 
-void rs232ApeTime::rs232_process(uint32_t commanddata, uint8_t checksum)
+void rs232ApeTime::rs232_process(cmdFrame_t *cmd_ptr)
 {
-    cmdFrame.commanddata = commanddata;
-    cmdFrame.checksum = checksum;
-
+    cmdFrame = *cmd_ptr;
     switch (cmdFrame.comnd)
     {
     case RS232_APETIMECMD_GETTIME:

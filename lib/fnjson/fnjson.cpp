@@ -80,7 +80,7 @@ void FNJSON::setReadQuery(const std::string &queryString, uint8_t queryParam)
     _queryString = queryString;
     _queryParam = queryParam;
     _item = resolveQuery();
-    json_bytes_remaining = readValueLen();
+    _json_bytes_remaining = readValueLen();
 }
 
 /**
@@ -211,7 +211,7 @@ std::string FNJSON::getValue(cJSON *item)
         {
             // yes, return as 64 bit integer
 #ifdef VERBOSE_PROTOCOL
-            Debug_printf("S: [cJSON_IsNumber INT] %d\r\n", (int64_t)num);
+            Debug_printf("S: [cJSON_IsNumber INT] %llu\r\n", (int64_t)num);
 #endif
             ss << (int64_t)num;
         }
@@ -268,7 +268,7 @@ std::string FNJSON::getValue(cJSON *item)
     }
     else
         ss << "UNKNOWN" + lineEnding;
-  
+
     return ss.str();
 }
 
@@ -276,11 +276,12 @@ std::string FNJSON::getValue(cJSON *item)
  * Return requested value
  */
 bool FNJSON::readValue(uint8_t *rx_buf, unsigned short len)
-{    
+{
     if (_item == nullptr)
         return true; // error
 
     memcpy(rx_buf, getValue(_item).data(), len);
+    _json_bytes_remaining -= len;
 
     return false; // no error.
 }
@@ -318,19 +319,19 @@ bool FNJSON::parse()
     _parseBuffer.clear();
     _protocol->status(&ns);
 #ifdef VERBOSE_PROTOCOL
-    Debug_printf("json parse, initial status: ns.rxBW: %d, ns.conn: %d, ns.err: %d\r\n", ns.rxBytesWaiting, ns.connected, ns.error);
+    Debug_printf("json parse, initial status: ns.rxBW: %d, ns.conn: %d, ns.err: %d\r\n", _protocol->available(), ns.connected, ns.error);
 #endif
 #ifdef ESP_PLATFORM
     while (ns.connected)
 #else
     // fujinet-pc closes before the data has been fully read, we need to ensure the data in the buffer is used
-    while (ns.connected || ns.rxBytesWaiting > 0)
+    while (ns.connected || _protocol->available() > 0)
 #endif
     {
         // don't try reading 0 bytes when there's no content.
-        if (ns.rxBytesWaiting > 0)
+        if (_protocol->available() > 0)
         {
-            _protocol->read(ns.rxBytesWaiting);
+            _protocol->read(_protocol->available());
             _parseBuffer += *_protocol->receiveBuffer;
             _protocol->receiveBuffer->clear();
         }
@@ -362,7 +363,6 @@ bool FNJSON::status(NetworkStatus *s)
 {
     // Debug_printf("FNJSON::status(%u) %s\r\n", json_bytes_remaining, getValue(_item).c_str());
     s->connected = true;
-    s->rxBytesWaiting = json_bytes_remaining;
-    s->error = json_bytes_remaining == 0 ? 136 : 0;
+    s->error = _json_bytes_remaining == 0 ? 136 : 0;
     return false;
 }

@@ -13,7 +13,6 @@
 #include "../../include/debug.h"
 
 #include "fnSystem.h"
-#include "fnUART.h"
 #include "fnFsSD.h"
 #include "fnFsSPIFFS.h"
 
@@ -32,7 +31,7 @@ void drivewireCassette::play()
     // size_t sz = 0UL;
 
     // Debug_printv("Reading /hdbcc2.raw");
-    
+
     // // Determine and allocate memory for image
     // fseek(casf, 0UL, SEEK_END);
     // sz = ftell(casf);
@@ -41,7 +40,7 @@ void drivewireCassette::play()
 
     // // Read image into memory
     // fread(casbuf, sizeof(uint8_t), sz, casf);
-    
+
     // // Done with file
     // fclose(casf);
 
