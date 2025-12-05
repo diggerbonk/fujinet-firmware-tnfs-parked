@@ -1134,7 +1134,7 @@ void sioFuji::sio_open_directory()
 
     Debug_printf("Opening directory: \"%s\", pattern: \"%s\"\n", dirpath, pattern ? pattern : "");
 
-    if (_fnHosts[hostSlot].dir_open(dirpath, pattern, 0))
+    if (_fnHosts[hostSlot].dir_open(dirpath, pattern, 0, true))
     {
         _current_open_directory_slot = hostSlot;
         sio_complete();
@@ -1148,6 +1148,35 @@ size_t _set_additional_direntry_details(fsdir_entry_t *f, uint8_t *dest, uint8_t
     return set_additional_direntry_details(f, dest, maxlen, 70, SIZE_32_LE,
                                            HAS_DIR_ENTRY_FLAGS_SEPARATE, HAS_DIR_ENTRY_TYPE);
 }
+
+void sioFuji::sio_read_menu_entry(uint8_t maxlen, fujiMenu * fm)
+{   
+    char replybuffer[256];
+    
+    if (!fm->next_menu_entry()) 
+    {
+        // end of men
+        replybuffer[0] = 0x7F;
+        replybuffer[1] = 0x7F;
+        bus_to_computer((uint8_t *)replybuffer, maxlen, false);
+        return;
+    }
+    
+    memset(replybuffer, 0, 256);
+    int offset = 0;
+    
+    // if the client supports embedding the item type, we encode it in the 
+    // first two bytes of the response buffer.
+    if (cmdFrame.aux2 & 0x40) {
+        replybuffer[0] = fm->get_menu_entry_type() >> 8;
+        replybuffer[1] = fm->get_menu_entry_type();
+        offset = 2;
+    }
+            
+    fm->get_item(&replybuffer[offset]);
+    bus_to_computer((uint8_t *)replybuffer, maxlen, false);
+}
+
 
 /*
  * Read directory entries in block mode
@@ -1326,6 +1355,9 @@ void sioFuji::sio_read_directory_entry()
 
     uint8_t maxlen = cmdFrame.aux1;
     Debug_printf("Fuji cmd: READ DIRECTORY ENTRY (max=%hu)\n", maxlen);
+
+    fujiHost *fh = &_fnHosts[_current_open_directory_slot];
+    if (fh->get_menu()) return sio_read_menu_entry(maxlen, fh->get_menu());
 
     char current_entry[256];
 

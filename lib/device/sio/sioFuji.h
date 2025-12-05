@@ -122,6 +122,7 @@ protected:
     void sio_hash_compute(bool clear_data); // 0xC7, 0xC3
     void sio_hash_length();            // 0xC6
     void sio_hash_output();            // 0xC5
+    void sio_read_menu_entry(uint8_t maxlen, fujiMenu *fm);
     void sio_get_adapter_config_extended(); // 0xC4
     void sio_hash_clear();             // 0xC2
     void sio_qrcode_input();           // 0xBC
