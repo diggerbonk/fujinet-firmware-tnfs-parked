@@ -1134,7 +1134,7 @@ void sioFuji::sio_open_directory()
 
     Debug_printf("Opening directory: \"%s\", pattern: \"%s\"\n", dirpath, pattern ? pattern : "");
 
-    if (_fnHosts[hostSlot].dir_open(dirpath, pattern, 0, true))
+    if (_fnHosts[hostSlot].dir_open(dirpath, pattern, 0, cmdFrame.aux2 & 1))
     {
         _current_open_directory_slot = hostSlot;
         sio_complete();
