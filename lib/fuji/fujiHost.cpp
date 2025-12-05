@@ -195,7 +195,8 @@ fsdir_entry_t *fujiHost::dir_nextfile()
     case HOSTTYPE_SMB:
     case HOSTTYPE_FTP:
     case HOSTTYPE_HTTP:
-        return _fs->dir_read();
+        if (_menu.get_initialized()) return _menu.next_menu_entry();
+        else return _fs->dir_read();
     case HOSTTYPE_UNINITIALIZED:
         break;
     }

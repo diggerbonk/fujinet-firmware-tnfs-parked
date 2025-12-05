@@ -1356,8 +1356,8 @@ void sioFuji::sio_read_directory_entry()
     uint8_t maxlen = cmdFrame.aux1;
     Debug_printf("Fuji cmd: READ DIRECTORY ENTRY (max=%hu)\n", maxlen);
 
-    fujiHost *fh = &_fnHosts[_current_open_directory_slot];
-    if (fh->get_menu()) return sio_read_menu_entry(maxlen, fh->get_menu());
+    //fujiHost *fh = &_fnHosts[_current_open_directory_slot];
+    //if (fh->get_menu()) return sio_read_menu_entry(maxlen, fh->get_menu());
 
     char current_entry[256];
 
