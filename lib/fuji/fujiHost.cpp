@@ -173,7 +173,6 @@ bool fujiHost::dir_open(const char *path, const char *pattern, uint16_t options,
         break;
     }
 
-
     // if there is a tnfs.menu file, initialize the menu
     if (useMenu) {
         if (strlen(realpath) > 1) strlcat(realpath, "/tnfs.menu", 256);
