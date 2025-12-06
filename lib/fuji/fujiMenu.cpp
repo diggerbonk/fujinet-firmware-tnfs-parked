@@ -79,7 +79,7 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
     Debug_printf("fujiMenu::next_menu_entry\n");
 
     char tempBuf[MAX_MENU_LINE_LEN];
-    _type = RESOURCE_TYPE_TEXT;
+    uint8_t type = RESOURCE_TYPE_TEXT;
     int16_t len = 0;
     uint8_t itemStart = 0;
 
@@ -115,7 +115,7 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
     if (tempBuf[0] == '-' && tempBuf[1] != '-') {
         char * pt = strchr(tempBuf, ' ');
         if (pt && (pt - tempBuf) < 5) {
-            _type = decode_menutype(tempBuf+1);
+            type = decode_menutype(tempBuf+1);
             itemStart = (pt - tempBuf + 1);
             len = len - itemStart;
         }
@@ -123,7 +123,7 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
 
     if (len >= MAX_MENU_ITEM_LEN) len = MAX_MENU_ITEM_LEN-1;
   
-    if (_type == RESOURCE_TYPE_FOLDER) 
+    if (type == RESOURCE_TYPE_FOLDER) 
     {
         len++;
         tempBuf[len-1] = '/';
@@ -131,9 +131,9 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
     }
 
     strncpy(_direntry.filename, tempBuf, MAX_PATHLEN);
-    _direntry.isDir = (_type == RESOURCE_TYPE_FOLDER);
+    _direntry.isDir = (type == RESOURCE_TYPE_FOLDER);
     _direntry.size = 0;
     _direntry.modified_time = 0;
-    _direntry.resource_type = _type;
+    _direntry.resource_type = type;
     return &_direntry;
 }

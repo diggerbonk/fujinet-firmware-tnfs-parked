@@ -24,9 +24,6 @@ private:
     uint16_t _current_pos = 0;
     fsdir_entry _direntry;
 
-    uint16_t _type = RESOURCE_TYPE_TEXT;
-//    uint8_t _item_len = 0;
-//    char _item[MAX_MENU_ITEM_LEN];
     uint16_t decode_menutype(const char * buf);
 
 public:
@@ -34,9 +31,6 @@ public:
     fujiMenu() {};
     ~fujiMenu() {};
 
-    uint16_t get_item_type() { return _type; };
-//    uint8_t get_item_len() { return _item_len; };
-    uint8_t get_item(char * p);
     bool init(const char *path, FILE * mf);
     void release();
     bool get_initialized() { return (_menu_file != nullptr); };
