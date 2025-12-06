@@ -1318,18 +1318,14 @@ void sioFuji::sio_read_directory_entry()
         return;
     }
 
-    uint8_t maxlen = cmdFrame.aux1;
-    Debug_printf("Fuji cmd: READ DIRECTORY ENTRY (max=%hu)\n", maxlen);
-
-
     // detect block mode in request
     if ((cmdFrame.aux2 & 0xC0) == 0xC0) {
         sio_read_directory_block();
         return;
     }
 
-    int offset = 0;
-    if (cmdFrame.aux2 & 0x40) offset = 2;
+    uint8_t maxlen = cmdFrame.aux1;
+    Debug_printf("Fuji cmd: READ DIRECTORY ENTRY (max=%hu)\n", maxlen);
 
     char current_entry[256];
 
@@ -1346,7 +1342,7 @@ void sioFuji::sio_read_directory_entry()
         Debug_printf("::read_direntry \"%s\"\n", f->filename);
 
         int bufsize = sizeof(current_entry);
-        char *filenamedest = current_entry + offset;
+        char *filenamedest = current_entry;
 
         // If 0x80 is set on AUX2, send back additional information
         if (cmdFrame.aux2 & 0x80)
@@ -1372,14 +1368,6 @@ void sioFuji::sio_read_directory_entry()
         }
     }
 
-    // if the client supports embedding the item type, we encode it in the
-    // first two bytes of the response buffer.
-    if (offset == 2) {
-        uint16_t tp = 2;
-        current_entry[0] = f->resource_type >> 8;
-        current_entry[1] = f->resource_type;
-    }   
-            
     bus_to_computer((uint8_t *)current_entry, maxlen, false);
 }
 
