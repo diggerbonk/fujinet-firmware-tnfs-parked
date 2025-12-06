@@ -1148,34 +1148,6 @@ size_t _set_additional_direntry_details(fsdir_entry_t *f, uint8_t *dest, uint8_t
     return set_additional_direntry_details(f, dest, maxlen, 70, SIZE_32_LE,
                                            HAS_DIR_ENTRY_FLAGS_SEPARATE, HAS_DIR_ENTRY_TYPE);
 }
-/*
-void sioFuji::sio_read_menu_entry(uint8_t maxlen, fujiMenu * fm)
-{   
-    char replybuffer[256];
-    memset(replybuffer, 0, 256);
-    int offset = 0;
-    if (cmdFrame.aux2 & 0x40) offset = 2;
-    int16_t len = fm->next_menu_entry(&replybuffer[offset]);
-
-    if (len < 0) 
-    {
-        // end of menu
-        replybuffer[0] = 0x7F;
-        replybuffer[1] = 0x7F;
-        bus_to_computer((uint8_t *)replybuffer, maxlen, false);
-        return;
-    }
-    
-    // if the client supports embedding the item type, we encode it in the 
-    // first two bytes of the response buffer.
-    if (offset > 0) {
-        replybuffer[0] = fm->get_item_type() >> 8;
-        replybuffer[1] = fm->get_item_type();
-    }
-            
-    bus_to_computer((uint8_t *)replybuffer, maxlen, false);
-}
-*/
 
 /*
  * Read directory entries in block mode
