@@ -174,6 +174,7 @@ bool fujiHost::dir_open(const char *path, const char *pattern, uint16_t options,
     }
 
 
+    // if there is a tnfs.menu file, initialize the menu
     if (useMenu) {
         if (strlen(realpath) > 1) strlcat(realpath, "/tnfs.menu", 256);
         else strlcat(realpath, "tnfs.menu", 256);
@@ -195,7 +196,8 @@ fsdir_entry_t *fujiHost::dir_nextfile()
     case HOSTTYPE_SMB:
     case HOSTTYPE_FTP:
     case HOSTTYPE_HTTP:
-        return _fs->dir_read();
+        if (_menu.get_initialized()) return _menu.next_menu_entry();
+        else return _fs->dir_read();
     case HOSTTYPE_UNINITIALIZED:
         break;
     }
