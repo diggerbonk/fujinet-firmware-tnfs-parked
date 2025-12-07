@@ -79,6 +79,8 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
     Debug_printf("fujiMenu::next_menu_entry\n");
 
     char tempBuf[MAX_MENU_LINE_LEN];
+    memset(tempBuf, 0, MAX_MENU_LINE_LEN);
+
     uint8_t type = RESOURCE_TYPE_TEXT;
     int16_t len = 0;
     uint8_t itemStart = 0;
@@ -130,7 +132,8 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
         tempBuf[len] = 0;
     }
 
-    strncpy(_direntry.filename, tempBuf, MAX_PATHLEN);
+    Debug_printf("fujiMenu::next_menu_entry found file type %i for: %s\r\n", type, tempBuf);
+    strncpy(_direntry.filename, &tempBuf[itemStart], len);
     _direntry.isDir = (type == RESOURCE_TYPE_FOLDER);
     _direntry.size = 0;
     _direntry.modified_time = 0;
