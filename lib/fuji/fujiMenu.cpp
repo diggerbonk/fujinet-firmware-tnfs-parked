@@ -76,10 +76,10 @@ uint16_t fujiMenu::decode_menutype(const char * buf)
 
 fsdir_entry_t * fujiMenu::next_menu_entry()
 {
-    Debug_printf("fujiMenu::next_menu_entry\n");
+    Debug_printf("fujiMenu::next_menu_entry\r\n");
 
     char tempBuf[MAX_MENU_LINE_LEN];
-    memset(tempBuf, 0, MAX_MENU_LINE_LEN);
+    memset(_direntry.filename, 0, MAX_MENU_LINE_LEN);
 
     uint8_t type = RESOURCE_TYPE_TEXT;
     int16_t len = 0;
@@ -101,6 +101,8 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
         return nullptr;
     }
 
+    Debug_printf("fujiMenu::next_menu_entry next menu line: |%s|\r\n", tempBuf);
+
     _current_pos += 1;
     _current_offset += strlen(tempBuf);
 
@@ -108,6 +110,7 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
 
     len = strlen(tempBuf);
 
+    // trim trailing newline
     if (len>0 && tempBuf[len-1] == '\n') {
         tempBuf[len-1] = 0;
         len--;
@@ -125,15 +128,12 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
 
     if (len >= MAX_MENU_ITEM_LEN) len = MAX_MENU_ITEM_LEN-1;
   
-    if (type == RESOURCE_TYPE_FOLDER) 
-    {
-        len++;
-        tempBuf[len-1] = '/';
-        tempBuf[len] = 0;
-    }
+    Debug_printf("fujiMenu::next_menu_entry found file type %i for: |%s|\r\n", type, tempBuf+itemStart);
 
-    Debug_printf("fujiMenu::next_menu_entry found file type %i for: %s\r\n", type, tempBuf);
-    strncpy(_direntry.filename, &tempBuf[itemStart], len);
+    //_direntry.filename[0] = type >> 8;
+    //_direntry.filename[1] = type;
+    //strncpy(_direntry.filename+2, tempBuf+itemStart, len);
+    strncpy(_direntry.filename, tempBuf+itemStart, len);
     _direntry.isDir = (type == RESOURCE_TYPE_FOLDER);
     _direntry.size = 0;
     _direntry.modified_time = 0;

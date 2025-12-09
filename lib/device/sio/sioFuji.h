@@ -36,6 +36,7 @@ private:
     sioCassette _cassetteDev;
 
     int _current_open_directory_slot = -1;
+    bool _use_types = false;
 
     sioDisk _bootDisk; // special disk drive just for configuration
 
@@ -129,6 +130,7 @@ protected:
     void sio_qrcode_length();          // OxBE
     void sio_qrcode_output();          // 0xBF
 
+    void read_menu_entry(uint8_t maxlen, fujiMenu *fm);
     void sio_status() override;
     void sio_process(uint32_t commanddata, uint8_t checksum) override;
 

@@ -9,12 +9,6 @@
 #define MAX_MENU_LINE_LEN MAX_PATHLEN
 #define MAX_MENU_LINES 2048
 
-//#define MENU_TYPE_TEXT 0
-//#define MENU_TYPE_FOLDER 1
-//#define MENU_TYPE_BINARY 2
-//#define MENU_TYPE_LINK 3
-//#define MENU_TYPE_SUBMENU 4
-
 class fujiMenu
 {
 private:

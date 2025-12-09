@@ -337,6 +337,7 @@ fsdir_entry * FileSystemTNFS::dir_read()
     _direntry.size = fstat.filesize;
     _direntry.modified_time = fstat.m_time;
     _direntry.isDir = fstat.isDir;
+    _direntry.resource_type = fstat.isDir ? RESOURCE_TYPE_FOLDER : RESOURCE_TYPE_FILE;
 
     return &_direntry;
 }
