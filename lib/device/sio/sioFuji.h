@@ -36,7 +36,6 @@ private:
     sioCassette _cassetteDev;
 
     int _current_open_directory_slot = -1;
-    bool _use_types = false;
 
     sioDisk _bootDisk; // special disk drive just for configuration
 
