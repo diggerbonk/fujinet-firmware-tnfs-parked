@@ -1349,8 +1349,7 @@ void sioFuji::sio_read_directory_entry()
     {
         Debug_printf("::read_direntry \"%s\"\n", f->filename);
 
-        int offset = 0;
-        int bufsize = maxlen;
+        int bufsize = sizeof(current_entry);
         char *filenamedest = current_entry;
 
         // If 0x80 is set on AUX2, send back additional information
@@ -1360,19 +1359,16 @@ void sioFuji::sio_read_directory_entry()
             // Adjust remaining size of buffer and file path destination
             bufsize = maxlen - len;
             filenamedest = current_entry + len;
-            Debug_printf("sioFuji::sio_read_directory_entry filenamedest: |%s|\r\n", filenamedest);
         }
-        else if (_use_types) 
+        else
         {
-            current_entry[0] = f->resource_type >> 8;
-            current_entry[1] = f->resource_type;
-            filenamedest = current_entry + 2;
-            bufsize = maxlen - 2;
-            offset = 2;
+            bufsize = maxlen;
         }
 
-        int filelen = util_ellipsize(f->filename, filenamedest, bufsize) + offset;
+        // int filelen = strlcpy(filenamedest, f->filename, bufsize);
+        int filelen = util_ellipsize(f->filename, filenamedest, bufsize);
 
+        // Add a slash at the end of directory entries
         if (f->isDir && filelen < (bufsize - 2))
         {
             current_entry[filelen] = '/';
