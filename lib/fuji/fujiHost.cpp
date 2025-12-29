@@ -13,6 +13,8 @@
 
 #include "utils.h"
 
+fujiMenu fujiHost::_menu;
+
 void fujiHost::unmount()
 {
     cleanup();
@@ -180,6 +182,9 @@ bool fujiHost::dir_open(const char *path, const char *pattern, uint16_t options,
         FILE * mf = _fs->file_open(realpath, "r");
         if (mf) _menu.init(realpath, mf);
     }
+    else {
+        _menu.release();
+    }
 
     return result;
 }
@@ -195,8 +200,7 @@ fsdir_entry_t *fujiHost::dir_nextfile()
     case HOSTTYPE_SMB:
     case HOSTTYPE_FTP:
     case HOSTTYPE_HTTP:
-        if (_menu.get_initialized()) return _menu.next_menu_entry();
-        else return _fs->dir_read();
+        return _fs->dir_read();
     case HOSTTYPE_UNINITIALIZED:
         break;
     }

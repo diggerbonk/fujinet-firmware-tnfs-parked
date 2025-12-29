@@ -1324,6 +1324,8 @@ void sioFuji::sio_read_directory_entry()
         return;
     }
 
+    uint8_t maxlen = cmdFrame.aux1;
+    Debug_printf("Fuji cmd: READ DIRECTORY ENTRY (max=%hu)\n", maxlen);
 
     fujiHost *fh = &_fnHosts[_current_open_directory_slot];
     if (fh->get_menu()) {
@@ -1331,51 +1333,40 @@ void sioFuji::sio_read_directory_entry()
         return;
     }
 
-    uint8_t maxlen = cmdFrame.aux1;
-    Debug_printf("Fuji cmd: READ DIRECTORY ENTRY (max=%hu)\n", maxlen);
-
     char current_entry[256];
+    memset(current_entry, 0, 256);
 
-    fsdir_entry_t *f = fh.dir_nextfile();
+    fsdir_entry_t *f = fh->dir_nextfile();
 
     if (f == nullptr)
     {
         Debug_println("Reached end of of directory");
         current_entry[0] = 0x7F;
         current_entry[1] = 0x7F;
-    }
-    else
-    {
-        Debug_printf("::read_direntry \"%s\"\n", f->filename);
-
-        int bufsize = sizeof(current_entry);
-        char *filenamedest = current_entry;
-
-        // If 0x80 is set on AUX2, send back additional information
-        if (cmdFrame.aux2 & 0x80)
-        {
-            size_t len = _set_additional_direntry_details(f, (uint8_t *)current_entry, maxlen);
-            // Adjust remaining size of buffer and file path destination
-            bufsize = maxlen - len;
-            filenamedest = current_entry + len;
-        }
-        else
-        {
-            bufsize = maxlen;
-        }
-
-        // int filelen = strlcpy(filenamedest, f->filename, bufsize);
-        int filelen = util_ellipsize(f->filename, filenamedest, bufsize);
-
-        // Add a slash at the end of directory entries
-        if (f->isDir && filelen < (bufsize - 2))
-        {
-            current_entry[filelen] = '/';
-            current_entry[filelen + 1] = '\0';
-        }
+        bus_to_computer((uint8_t *)current_entry, maxlen, false);
+        return;
     }
 
+    int offset = 0;
+        
+    // if the client supports embedding the item type, we encode it in the
+    // first two bytes of the response buffer.
+    if (cmdFrame.aux2 & 0x40) {
+        if (f->isDir) {
+            current_entry[0] = 1 >> 8;
+            current_entry[1] = 1;
+        }
+        else {
+            current_entry[0] = 2 >> 8;
+            current_entry[1] = 2;
+        }
+        offset = 2;
+    }
+
+    
+    int filelen = strlcpy(&current_entry[offset], f->filename, strlen(f->filename)+1);
     bus_to_computer((uint8_t *)current_entry, maxlen, false);
+
 }
 
 void sioFuji::read_menu_entry(uint8_t maxlen, fujiMenu * fm)

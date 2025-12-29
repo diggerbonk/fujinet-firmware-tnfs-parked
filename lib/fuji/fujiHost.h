@@ -23,7 +23,7 @@ private:
     const char * _sdhostname = "SD";
     FileSystem *_fs = nullptr;
     fujiHostType _type;
-    fujiMenu _menu;
+    static fujiMenu _menu;
 
     char _hostname[MAX_HOSTNAME_LEN] = { '\0' };
     char _prefix[MAX_HOST_PREFIX_LEN] = { '\0' };
