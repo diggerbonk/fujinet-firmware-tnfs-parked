@@ -1134,7 +1134,7 @@ void sioFuji::sio_open_directory()
 
     Debug_printf("Opening directory: \"%s\", pattern: \"%s\"\n", dirpath, pattern ? pattern : "");
 
-    if (_fnHosts[hostSlot].dir_open(dirpath, pattern, 0))
+    if (_fnHosts[hostSlot].dir_open(dirpath, pattern, 0, cmdFrame.aux2 & 1))
     {
         _current_open_directory_slot = hostSlot;
         sio_complete();
@@ -1327,48 +1327,74 @@ void sioFuji::sio_read_directory_entry()
     uint8_t maxlen = cmdFrame.aux1;
     Debug_printf("Fuji cmd: READ DIRECTORY ENTRY (max=%hu)\n", maxlen);
 
-    char current_entry[256];
+    fujiHost *fh = &_fnHosts[_current_open_directory_slot];
+    if (fh->get_menu()) {
+        read_menu_entry(maxlen, fh->get_menu());
+        return;
+    }
 
-    fsdir_entry_t *f = _fnHosts[_current_open_directory_slot].dir_nextfile();
+    char current_entry[256];
+    memset(current_entry, 0, 256);
+
+    fsdir_entry_t *f = fh->dir_nextfile();
 
     if (f == nullptr)
     {
         Debug_println("Reached end of of directory");
         current_entry[0] = 0x7F;
         current_entry[1] = 0x7F;
-    }
-    else
-    {
-        Debug_printf("::read_direntry \"%s\"\n", f->filename);
-
-        int bufsize = sizeof(current_entry);
-        char *filenamedest = current_entry;
-
-        // If 0x80 is set on AUX2, send back additional information
-        if (cmdFrame.aux2 & 0x80)
-        {
-            size_t len = _set_additional_direntry_details(f, (uint8_t *)current_entry, maxlen);
-            // Adjust remaining size of buffer and file path destination
-            bufsize = maxlen - len;
-            filenamedest = current_entry + len;
-        }
-        else
-        {
-            bufsize = maxlen;
-        }
-
-        // int filelen = strlcpy(filenamedest, f->filename, bufsize);
-        int filelen = util_ellipsize(f->filename, filenamedest, bufsize);
-
-        // Add a slash at the end of directory entries
-        if (f->isDir && filelen < (bufsize - 2))
-        {
-            current_entry[filelen] = '/';
-            current_entry[filelen + 1] = '\0';
-        }
+        bus_to_computer((uint8_t *)current_entry, maxlen, false);
+        return;
     }
 
+    int offset = 0;
+        
+    // if the client supports embedding the item type, we encode it in the
+    // first two bytes of the response buffer.
+    if (cmdFrame.aux2 & 0x40) {
+        if (f->isDir) {
+            current_entry[0] = 1 >> 8;
+            current_entry[1] = 1;
+        }
+        else {
+            current_entry[0] = 2 >> 8;
+            current_entry[1] = 2;
+        }
+        offset = 2;
+    }
+
+    
+    int filelen = strlcpy(&current_entry[offset], f->filename, strlen(f->filename)+1);
     bus_to_computer((uint8_t *)current_entry, maxlen, false);
+
+}
+
+void sioFuji::read_menu_entry(uint8_t maxlen, fujiMenu * fm)
+{
+    char replybuffer[256];
+
+    if (!fm->next_menu_entry()) 
+    {
+        // end of men
+        replybuffer[0] = 0x7F;
+        replybuffer[1] = 0x7F;
+        bus_to_computer((uint8_t *)replybuffer, maxlen, false);
+        return;
+    }
+
+    memset(replybuffer, 0, 256);
+    int offset = 0;
+
+    // if the client supports embedding the item type, we encode it in the 
+    // first two bytes of the response buffer.
+    if (cmdFrame.aux2 & 0x40) {
+        replybuffer[0] = fm->get_menu_entry_type() >> 8;
+        replybuffer[1] = fm->get_menu_entry_type();
+        offset = 2;
+    }
+
+    fm->get_item(&replybuffer[offset]);
+    bus_to_computer((uint8_t *)replybuffer, maxlen, false);
 }
 
 void sioFuji::sio_get_directory_position()
