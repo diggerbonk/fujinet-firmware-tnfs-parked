@@ -26,7 +26,6 @@ private:
     bool _debug = false;;
 
     uint16_t _type = MENU_TYPE_TEXT;
-    uint16_t _item_len = 0;
     uint16_t decode_menutype(const char * buf);
 
 public:
@@ -34,10 +33,6 @@ public:
     fujiMenu() {};
     ~fujiMenu() {};
 
-    uint16_t get_menu_entry_type() { return _type; };
-    uint8_t get_item_len() { return _item_len; };
-    uint8_t get_item(char * p);
-    
     bool init(const char *path, FILE * mf);
     void release();
     bool get_initialized() { return (_menu_file != nullptr); };

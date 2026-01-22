@@ -74,11 +74,12 @@ uint16_t fujiMenu::decode_menutype(const char * buf)
 
 fsdir_entry_t * fujiMenu::next_menu_entry() 
 {
-	char tempBuf[MAX_MENU_LINE_LEN];
-	memset(tempBuf, 0, MAX_MENU_LINE_LEN);
+    char tempBuf[MAX_MENU_LINE_LEN];
+    memset(tempBuf, 0, MAX_MENU_LINE_LEN);
 
-    _type = MENU_TYPE_TEXT;
-    _item_len = 0;
+    uint16_t menuType = MENU_TYPE_TEXT;
+    
+    uint16_t itemLen = 0;
     uint8_t itemStart = 0;
 
     // if we have an offset, skip to it. 
@@ -106,36 +107,26 @@ fsdir_entry_t * fujiMenu::next_menu_entry()
         }
         else return nullptr;
 
-        _item_len = len;
+        itemLen = len;
 
         if (tempBuf[0] == '-' && tempBuf[1] != '-') {
             char * pt = strchr(tempBuf, ' ');
             if (pt && (pt - tempBuf) < 5) {
-                _type = decode_menutype(tempBuf+1);
+                menuType = decode_menutype(tempBuf+1);
                 itemStart = (pt - tempBuf + 1);
-                _item_len = len - itemStart;
+                itemLen = len - itemStart;
             }
         }
 
-        if (_item_len >= MAX_MENU_ITEM_LEN) _item_len = MAX_MENU_ITEM_LEN-1;
-
-        //strncpy(_item, &tempBuf[itemStart], _item_len);
-
-
-        //if (_type == MENU_TYPE_FOLDER) 
-        //{
-        //    _item_len++;
-        //    _item[itemStart + _item_len-1] = '/';
-        //    _item[itemStart + _item_len] = 0;
-        //}
+        if (itemLen >= MAX_MENU_ITEM_LEN) itemLen = MAX_MENU_ITEM_LEN-1;
 
         // populate _direntry;
         memset(_direntry.filename, 0, MAX_MENU_LINE_LEN);
-        strncpy(_direntry.filename, &tempBuf[itemStart], _item_len);
-        _direntry.isDir = (_type == RESOURCE_TYPE_FOLDER);
+        strncpy(_direntry.filename, &tempBuf[itemStart], itemLen);
+        _direntry.isDir = (menuType == RESOURCE_TYPE_FOLDER);
         _direntry.size = 0;
         _direntry.modified_time = 0;
-        _direntry.resourceType = _type;
+        _direntry.resourceType = menuType;
         return &_direntry;
 
     }
